@@ -30,17 +30,15 @@ class LogisticRegressionModel:
 
     def predict(self, query):
         features = LogisticRegressionModel.extract_features(query, self.freqs)
-        result = self.model.predict_proba(features)
+        result = self.model.predict_proba(features[:, 1:])
         return result
     
     @staticmethod
     def train(train_x, train_y, freqs):
-        train_x_vec = np.zeros((len(train_x),3))
-        for i in range(len(train_x)):
-            train_x_vec[i,:] = LogisticRegressionModel.extract_features(train_x[i],freqs)
+        train_x_vec = np.vstack([LogisticRegressionModel.extract_features(t,freqs) for t in train_x])
 
         model = LogisticRegression()
-        model.fit(train_x_vec, train_y.ravel())
+        model.fit(train_x_vec[:, 1:], train_y.ravel())
 
         return model
 
