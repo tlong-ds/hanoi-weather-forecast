@@ -34,7 +34,7 @@ def remove_leakage_columns(df):
     Remove columns that cause data leakage or are non-informative.
     Keeps descriptive columns for lagged feature creation.
     """
-    cols_to_drop = ['tempmax', 'tempmin', 'name', 'stations', 'source', 'season']
+    cols_to_drop = ['tempmax', 'tempmin', 'name', 'stations', 'source', 'season', 'snow', 'snowdepth']
     df_clean = df.drop(columns=[c for c in cols_to_drop if c in df.columns], errors='ignore')
     return df_clean
 
