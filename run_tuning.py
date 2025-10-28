@@ -3,14 +3,16 @@ import optuna
 from clearml import Task, Logger
 from model_train import load_processed_data, train_models
 from model_evaluate import load_data, calculate_metrics
+from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
 from sklearn.multioutput import MultiOutputRegressor
 
+
 # =============== BƯỚC 1: KHỞI TẠO CLEARML TASK ===============
 task = Task.init(
     project_name="HanoiTemp_Forecast",
-    task_name="Optuna_Tuning_RF_XGB"
+    task_name="Optuna_Tuning_3Models"
 )
 
 # =============== BƯỚC 2: TẢI DỮ LIỆU ===============
@@ -20,16 +22,21 @@ X_dev, y_dev = load_data('dev')
 if X_train is None or X_dev is None:
     raise FileNotFoundError("❌ Không tải được dữ liệu. Kiểm tra thư mục processed_data.")
 
+
 # =============== BƯỚC 3: ĐỊNH NGHĨA HÀM CHO OPTUNA ===============
 def objective(trial):
     # --- 3.1 Chọn model ---
     model_name = trial.suggest_categorical(
         "model_name",
-        ["Random Forest", "XGBoost (MultiOutput)"]
+        ["Linear Regression", "Random Forest", "XGBoost (MultiOutput)"]
     )
 
     # --- 3.2 Gợi ý hyperparameters tùy theo model ---
-    if model_name == "Random Forest":
+    if model_name == "Linear Regression":
+        # LinearRegression không có hyperparam phức tạp, nên chỉ cần khởi tạo đơn giản
+        model_instance = LinearRegression()
+
+    elif model_name == "Random Forest":
         params = {
             "n_estimators": trial.suggest_int("n_estimators", 100, 400, step=50),
             "max_depth": trial.suggest_int("max_depth", 6, 18),
@@ -51,7 +58,7 @@ def objective(trial):
         }
         model_instance = MultiOutputRegressor(XGBRegressor(**params))
 
-    # --- 3.3 Train model (gọi qua train_models nếu muốn thống nhất format) ---
+    # --- 3.3 Huấn luyện model ---
     trained_models = train_models(
         X_train,
         y_train,
@@ -81,7 +88,7 @@ def objective(trial):
 # =============== BƯỚC 4: TẠO VÀ CHẠY OPTUNA STUDY ===============
 study = optuna.create_study(
     direction="minimize",
-    study_name="RF_vs_XGB_Tuning"
+    study_name="LR_RF_XGB_Tuning"
 )
 study.optimize(objective, n_trials=30)
 
