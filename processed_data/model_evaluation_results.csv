@@ -1,4 +1,2 @@
 ,target_temp_t+1_MAE,target_temp_t+1_RMSE,target_temp_t+2_MAE,target_temp_t+2_RMSE,target_temp_t+3_MAE,target_temp_t+3_RMSE,target_temp_t+4_MAE,target_temp_t+4_RMSE,target_temp_t+5_MAE,target_temp_t+5_RMSE,Average_MAE,Average_RMSE
-Linear Regression,1.1685,1.5272,1.6681,2.1615,1.9236,2.4626,1.9752,2.5389,1.9978,2.5609,1.7466,2.2836
-Random Forest,1.2915,1.646,1.8011,2.302,2.0796,2.6564,2.1625,2.7805,2.141,2.7562,1.8951,2.4655
-XGBoost (MultiOutput),1.162,1.5563,1.7134,2.2508,2.0614,2.7148,2.1513,2.8601,2.1401,2.7687,1.8456,2.4781
+Linear Regression,1.1569,1.4961,1.5302,1.9736,1.7022,2.1889,1.7791,2.2684,1.8005,2.2945,1.5938,2.0657
