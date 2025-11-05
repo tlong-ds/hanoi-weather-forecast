@@ -114,13 +114,18 @@ def create_lag_features(df):
     Create lag features to capture previous days' conditions.
     """
     df_new = df.copy()
-    
+
     # Define lag configuration
     USE_LAGS = {
-        'temp': [1, 2, 3, 7],           # Yesterday, 2-3 days ago, last week
-        'humidity': [1], 
-        'sealevelpressure': [3],         # 3 days ago pressure
-        'windspeed': [1, 2]              # Recent wind patterns
+        'temp': [1, 3, 7],   
+        'dew': [1, 3, 7],        
+        'humidity': [1, 3, 7], 
+        'sealevelpressure': [1, 3, 7],         
+        'windspeed': [1, 3, 7],
+        'precip': [1, 3, 7],
+        'cloudcover': [1, 3, 7],
+        'winddir_sin': [1, 3, 7],
+        'winddir_cos': [1, 3, 7],     
     }
     
     for base_col, lags in USE_LAGS.items():
@@ -138,13 +143,73 @@ def create_rolling_features(df):
     
     if 'precip' in df_new.columns:
         df_new['precip_roll_mean_7'] = df_new['precip'].shift(1).rolling(7).mean()
+        df_new['precip_roll_std_7'] = df_new['precip'].shift(1).rolling(7).std()
+        df_new['precip_roll_mean_14'] = df_new['precip'].shift(1).rolling(14).mean()
+        df_new['precip_roll_std_14'] = df_new['precip'].shift(1).rolling(14).std()
+        df_new['precip_roll_mean_21'] = df_new['precip'].shift(1).rolling(21).mean()
+        df_new['precip_roll_std_21'] = df_new['precip'].shift(1).rolling(21).std()
+        df_new['precip_roll_mean_28'] = df_new['precip'].shift(1).rolling(28).mean()
+        df_new['precip_roll_std_28'] = df_new['precip'].shift(1).rolling(28).std()
+        df_new['precip_roll_mean_56'] = df_new['precip'].shift(1).rolling(56).mean()
+        df_new['precip_roll_std_56'] = df_new['precip'].shift(1).rolling(56).std()
+        df_new['precip_roll_mean_84'] = df_new['precip'].shift(1).rolling(84).mean()
+        df_new['precip_roll_std_84'] = df_new['precip'].shift(1).rolling(84).std()
     
     if 'humidity' in df_new.columns:
         df_new['humidity_roll_mean_7'] = df_new['humidity'].shift(1).rolling(7).mean()
+        df_new['humidity_roll_std_7'] = df_new['humidity'].shift(1).rolling(7).std()
+        df_new['humidity_roll_mean_14'] = df_new['humidity'].shift(1).rolling(14).mean()
+        df_new['humidity_roll_std_14'] = df_new['humidity'].shift(1).rolling(14).std()
+        df_new['humidity_roll_mean_21'] = df_new['humidity'].shift(1).rolling(21).mean()
+        df_new['humidity_roll_std_21'] = df_new['humidity'].shift(1).rolling(21).std()
+        df_new['humidity_roll_mean_28'] = df_new['humidity'].shift(1).rolling(28).mean()
+        df_new['humidity_roll_std_28'] = df_new['humidity'].shift(1).rolling(28).std()
+        df_new['humidity_roll_mean_56'] = df_new['humidity'].shift(1).rolling(56).mean()
+        df_new['humidity_roll_std_56'] = df_new['humidity'].shift(1).rolling(56).std()
+        df_new['humidity_roll_mean_84'] = df_new['humidity'].shift(1).rolling(84).mean()
+        df_new['humidity_roll_std_84'] = df_new['humidity'].shift(1).rolling(84).std()
     
     if 'windspeed' in df_new.columns:
-        df_new['windspeed_roll_max_3'] = df_new['windspeed'].shift(1).rolling(3).max()
+        df_new['windspeed_roll_mean_7'] = df_new['windspeed'].shift(1).rolling(7).mean()
+        df_new['windspeed_roll_std_7'] = df_new['windspeed'].shift(1).rolling(7).std()
+        df_new['windspeed_roll_mean_14'] = df_new['windspeed'].shift(1).rolling(14).mean()
+        df_new['windspeed_roll_std_14'] = df_new['windspeed'].shift(1).rolling(14).std()
+        df_new['windspeed_roll_mean_21'] = df_new['windspeed'].shift(1).rolling(21).mean()
+        df_new['windspeed_roll_std_21'] = df_new['windspeed'].shift(1).rolling(21).std()
+        df_new['windspeed_roll_mean_28'] = df_new['windspeed'].shift(1).rolling(28).mean()
+        df_new['windspeed_roll_std_28'] = df_new['windspeed'].shift(1).rolling(28).std()
+        df_new['windspeed_roll_mean_56'] = df_new['windspeed'].shift(1).rolling(56).mean()
+        df_new['windspeed_roll_std_56'] = df_new['windspeed'].shift(1).rolling(56).std()
+        df_new['windspeed_roll_mean_84'] = df_new['windspeed'].shift(1).rolling(84).mean()
+        df_new['windspeed_roll_std_84'] = df_new['windspeed'].shift(1).rolling(84).std()
+
+    if 'sealevelpressure' in df_new.columns:
+        df_new['sealevelpressure_roll_mean_7'] = df_new['sealevelpressure'].shift(1).rolling(7).mean()
+        df_new['sealevelpressure_roll_std_7'] = df_new['sealevelpressure'].shift(1).rolling(7).std()
+        df_new['sealevelpressure_roll_mean_14'] = df_new['sealevelpressure'].shift(1).rolling(14).mean()
+        df_new['sealevelpressure_roll_std_14'] = df_new['sealevelpressure'].shift(1).rolling(14).std()
+        df_new['sealevelpressure_roll_mean_21'] = df_new['sealevelpressure'].shift(1).rolling(21).mean()
+        df_new['sealevelpressure_roll_std_21'] = df_new['sealevelpressure'].shift(1).rolling(21).std()
+        df_new['sealevelpressure_roll_mean_28'] = df_new['sealevelpressure'].shift(1).rolling(28).mean()
+        df_new['sealevelpressure_roll_std_28'] = df_new['sealevelpressure'].shift(1).rolling(28).std()
+        df_new['sealevelpressure_roll_mean_56'] = df_new['sealevelpressure'].shift(1).rolling(56).mean()
+        df_new['sealevelpressure_roll_std_56'] = df_new['sealevelpressure'].shift(1).rolling(56).std()
+        df_new['sealevelpressure_roll_mean_84'] = df_new['sealevelpressure'].shift(1).rolling(84).mean()
+        df_new['sealevelpressure_roll_std_84'] = df_new['sealevelpressure'].shift(1).rolling(84).std()
     
+    if 'cloudcover' in df_new.columns:
+        df_new['cloudcover_roll_mean_7'] = df_new['cloudcover'].shift(1).rolling(7).mean()
+        df_new['cloudcover_roll_std_7'] = df_new['cloudcover'].shift(1).rolling(7).std()
+        df_new['cloudcover_roll_mean_14'] = df_new['cloudcover'].shift(1).rolling(14).mean()
+        df_new['cloudcover_roll_std_14'] = df_new['cloudcover'].shift(1).rolling(14).std()
+        df_new['cloudcover_roll_mean_21'] = df_new['cloudcover'].shift(1).rolling(21).mean()
+        df_new['cloudcover_roll_std_21'] = df_new['cloudcover'].shift(1).rolling(21).std()
+        df_new['cloudcover_roll_mean_28'] = df_new['cloudcover'].shift(1).rolling(28).mean()
+        df_new['cloudcover_roll_std_28'] = df_new['cloudcover'].shift(1).rolling(28).std()
+        df_new['cloudcover_roll_mean_56'] = df_new['cloudcover'].shift(1).rolling(56).mean()
+        df_new['cloudcover_roll_std_56'] = df_new['cloudcover'].shift(1).rolling(56).std()
+        df_new['cloudcover_roll_mean_84'] = df_new['cloudcover'].shift(1).rolling(84).mean()
+        df_new['cloudcover_roll_std_84'] = df_new['cloudcover'].shift(1).rolling(84).std()
     return df_new
 
 def create_interaction_features(df):
@@ -152,7 +217,6 @@ def create_interaction_features(df):
     Create physically meaningful interaction features.
     """
     df_new = df.copy()
-    
     
     # Wind intensity (non-linear effect)
     if 'windspeed' in df_new.columns:
