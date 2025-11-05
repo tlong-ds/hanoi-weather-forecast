@@ -1,4 +1,4 @@
-# ================== run_tuning.py (FAST PARALLEL VERSION) ==================
+# ================== run_tuning.py ==================
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -6,13 +6,10 @@ import optuna
 import numpy as np
 from clearml import Task, Logger
 from model_train import load_processed_data
-from sklearn.linear_model import LinearRegression
+from model_evaluate import load_data
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.multioutput import MultiOutputRegressor
-from sklearn.model_selection import KFold
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, mean_absolute_percentage_error
-import multiprocessing
-
 
 # ====== Optional imports ======
 try:
@@ -34,36 +31,19 @@ except ImportError:
 # =============== BƯỚC 1: KHỞI TẠO CLEARML TASK ===============
 task = Task.init(
     project_name="HanoiTemp_Forecast",
-    task_name="Optuna_Tuning_5Models_GPU_PARALLEL"
+    task_name="Optuna_Tuning_4Models"
 )
+
 
 # =============== BƯỚC 2: TẢI DỮ LIỆU ===============
 X_train, y_train = load_processed_data()
-if X_train is None:
-    raise FileNotFoundError("❌ Không tải được dữ liệu train.")
+X_dev, y_dev = load_data('dev')
+
+if X_train is None or X_dev is None:
+    raise FileNotFoundError("❌ Không tải được dữ liệu train hoặc dev.")
 
 print(f"✅ Dữ liệu train: {X_train.shape}, target: {y_train.shape}")
-
-
-# =============== BƯỚC 3: CROSS-VALIDATION EVALUATION ===============
-def evaluate_model_cv(model, X, y, n_splits=3):
-    """Đánh giá trung bình RMSE, MAE, R², MAPE qua K-Fold"""
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
-
-    rmses, maes, r2s, mapes = [], [], [], []
-    for train_idx, val_idx in kf.split(X):
-        X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
-        y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
-
-        model.fit(X_tr, y_tr)
-        y_pred = model.predict(X_val)
-
-        rmses.append(np.sqrt(mean_squared_error(y_val, y_pred)))
-        maes.append(mean_absolute_error(y_val, y_pred))
-        r2s.append(r2_score(y_val, y_pred))
-        mapes.append(mean_absolute_percentage_error(y_val, y_pred))
-
-    return np.mean(rmses), np.mean(maes), np.mean(r2s), np.mean(mapes)
+print(f"✅ Dữ liệu dev: {X_dev.shape}, target: {y_dev.shape}")
 
 
 # =============== GPU CHECK HELPERS ===============
@@ -97,19 +77,15 @@ def _check_gpu_catboost():
         return False
 
 
-# =============== BƯỚC 4: OBJECTIVE FUNCTION (OPTUNA) ===============
+# =============== BƯỚC 3: ĐỊNH NGHĨA OBJECTIVE FUNCTION (OPTUNA) ===============
 def objective(trial):
     model_name = trial.suggest_categorical(
         "model_name",
-        ["Linear Regression", "Random Forest", "XGBoost", "LightGBM", "CatBoost"]
+        ["Random Forest", "XGBoost", "LightGBM", "CatBoost"]
     )
 
-    # -------- Linear Regression --------
-    if model_name == "Linear Regression":
-        model = MultiOutputRegressor(LinearRegression())
-
-    # -------- Random Forest --------
-    elif model_name == "Random Forest":
+    # -------- RANDOM FOREST --------
+    if model_name == "Random Forest":
         params = {
             "n_estimators": trial.suggest_int("n_estimators", 100, 400, step=50),
             "max_depth": trial.suggest_int("max_depth", 6, 18),
@@ -119,7 +95,7 @@ def objective(trial):
         }
         model = MultiOutputRegressor(RandomForestRegressor(**params))
 
-    # -------- XGBoost --------
+    # -------- XGBOOST --------
     elif model_name == "XGBoost" and XGBRegressor is not None:
         gpu_ok = _check_gpu_xgb()
         params = {
@@ -134,7 +110,7 @@ def objective(trial):
         }
         model = MultiOutputRegressor(XGBRegressor(**params))
 
-    # -------- LightGBM --------
+    # -------- LIGHTGBM --------
     elif model_name == "LightGBM" and LGBMRegressor is not None:
         gpu_ok = _check_gpu_lgbm()
         params = {
@@ -152,7 +128,7 @@ def objective(trial):
         }
         model = MultiOutputRegressor(LGBMRegressor(**params))
 
-    # -------- CatBoost --------
+    # -------- CATBOOST --------
     elif model_name == "CatBoost" and CatBoostRegressor is not None:
         gpu_ok = _check_gpu_catboost()
         params = {
@@ -168,35 +144,39 @@ def objective(trial):
             "random_state": 42,
         }
         model = MultiOutputRegressor(CatBoostRegressor(**params))
-    else:
-        raise ValueError(f"❌ Model {model_name} không khả dụng.")
 
-    # -------- Đánh giá model --------
-    avg_rmse, avg_mae, avg_r2, avg_mape = evaluate_model_cv(model, X_train, y_train, n_splits=3)
+    else:
+        raise ValueError(f"❌ Model {model_name} không khả dụng hoặc chưa được import.")
+
+    # -------- TRAIN + DEV EVALUATION --------
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_dev)
+
+    rmse = np.sqrt(mean_squared_error(y_dev, y_pred))
+    mae = mean_absolute_error(y_dev, y_pred)
+    r2 = r2_score(y_dev, y_pred)
+    mape = mean_absolute_percentage_error(y_dev, y_pred)
 
     # -------- Log ClearML --------
-    Logger.current_logger().report_scalar("RMSE", model_name, avg_rmse, trial.number)
-    Logger.current_logger().report_scalar("MAE", model_name, avg_mae, trial.number)
-    Logger.current_logger().report_scalar("R2", model_name, avg_r2, trial.number)
-    Logger.current_logger().report_scalar("MAPE", model_name, avg_mape, trial.number)
+    Logger.current_logger().report_scalar("RMSE", model_name, rmse, trial.number)
+    Logger.current_logger().report_scalar("MAE", model_name, mae, trial.number)
+    Logger.current_logger().report_scalar("R2", model_name, r2, trial.number)
+    Logger.current_logger().report_scalar("MAPE", model_name, mape, trial.number)
 
-    print(f"✅ Trial {trial.number} | {model_name}: RMSE={avg_rmse:.4f}, MAE={avg_mae:.4f}, R²={avg_r2:.4f}, MAPE={avg_mape:.4f}")
-    return avg_rmse  # mục tiêu: minimize RMSE
+    print(f"✅ Trial {trial.number} | {model_name}: RMSE={rmse:.4f}, MAE={mae:.4f}, R²={r2:.4f}, MAPE={mape:.4f}")
+    return rmse  # minimize RMSE
 
 
-# =============== BƯỚC 5: TẠO VÀ CHẠY OPTUNA SONG SONG ===============
+# =============== BƯỚC 4: CHẠY OPTUNA STUDY ===============
 if __name__ == "__main__":
-    n_jobs = max(1, multiprocessing.cpu_count() - 1)  # tận dụng tối đa CPU
-
     study = optuna.create_study(
         direction="minimize",
-        study_name="5Models_Tuning_GPU_Parallel",
+        study_name="4Models_Tuning_TrainDev"
     )
-
-    study.optimize(objective, n_trials=60, n_jobs=n_jobs, show_progress_bar=True)
+    study.optimize(objective, n_trials=60, show_progress_bar=True)
 
     # ====== TỔNG KẾT ======
-    print("\n===== 🎯 TỔNG KẾT =====")
+    print("\n===== 🎯 TỔNG KẾT CUỘC THI =====")
     print("Best trial params:")
     print(study.best_trial.params)
     print(f"✅ Lowest RMSE: {study.best_value:.4f}")
