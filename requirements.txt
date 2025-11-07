@@ -22,3 +22,5 @@ lightgbm
 catboost
 optuna
 onnxruntime
+skl2onnx
+onnx
