@@ -56,7 +56,7 @@ def objective(trial):
             "learning_  rate": trial.suggest_float("learning_rate", 0.01, 0.2),
             "subsample": trial.suggest_float("subsample", 0.6, 1.0),
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
-            "tree_method": "gpu_hist" if str(DEVICE) != "cpu" else "hist",
+            "tree_method": "gpu_hist" if str(DEVICE) == "cuda" else "hist",
             "device": "cuda" if str(DEVICE) == "cuda" else "cpu",
             "random_state": 42,
         }
