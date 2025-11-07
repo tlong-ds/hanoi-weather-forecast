@@ -1,70 +1,33 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import mean_absolute_error, mean_squared_error
 import os
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-# --- 1. Xác định các cột mục tiêu (Toàn cục) ---
-# Biến này sẽ được import bởi các tệp khác
-TARGET_COLUMNS = [
-    'target_temp_t+1', 
-    'target_temp_t+2', 
-    'target_temp_t+3', 
-    'target_temp_t+4', 
-    'target_temp_t+5'
-]
+# Import configuration and helper functions
+from model_helper import (
+    TARGET_COLUMNS, SAVE_RESULTS, RESULTS_FILENAME, RESULTS_DIR,
+    PLOT_ALL_HORIZONS, HORIZONS_TO_PLOT, VERBOSE_EVALUATION,
+    PRINT_METRICS_PER_HORIZON, PLOT_FIGSIZE_SCATTER, PLOT_FIGSIZE_TIMESERIES,
+)
 
-DATA_DIR = 'processed_data'
-
-def load_data(data_type='dev'):
+def calculate_metrics(y_true, y_pred_array, model_name="Model", is_test_set=False):
     """
-    Tải dữ liệu evaluation đã qua xử lý (dev hoặc test set).
-
-    Args:
-        data_type (str): 'dev' hoặc 'test'.
-
-    Returns:
-        tuple: (X_data, y_data) hoặc (None, None) nếu lỗi.
-    """
-    if data_type not in ['dev', 'test']:
-        print(f"Lỗi: data_type phải là 'dev' hoặc 'test', không phải '{data_type}'")
-        return None, None
-        
-    x_path = os.path.join(DATA_DIR, f'X_{data_type}_transformed.csv')
-    y_path = os.path.join(DATA_DIR, f'y_{data_type}.csv')
-
-    try:
-        X_data = pd.read_csv(x_path, index_col='datetime', parse_dates=True)
-        y_data = pd.read_csv(y_path, index_col='datetime', parse_dates=True)[TARGET_COLUMNS]
-
-        print(f" Tải dữ liệu {data_type} thành công!")
-        return X_data, y_data
+    Calculate evaluation metrics for multi-step forecasting.
     
-    except FileNotFoundError as e:
-        print(f" Lỗi: Không tìm thấy tệp {data_type}. Vui lòng kiểm tra lại đường dẫn.")
-        print(e)
-        return None, None
-    except KeyError as e:
-        print(f" Lỗi: Không tìm thấy cột mục tiêu trong tệp y_{data_type}.csv.")
-        print(e)
-        return None, None
-
-def calculate_metrics(y_true, y_pred_array, model_name="Model"):
-    """
-    Tính toán các chỉ số MAE, RMSE cho dự đoán đa bước.
+    For DEV set: MAE, RMSE, MAPE
+    For TEST set: MAE, RMSE, MAPE, R²
     
     Args:
-        y_true (pd.DataFrame): DataFrame chứa giá trị thực tế.
-        y_pred_array (np.array): Mảng NumPy chứa giá trị dự đoán (từ model.predict()).
-        model_name (str): Tên của mô hình để in ra.
+        y_true (pd.DataFrame): DataFrame with actual values
+        y_pred_array (np.array): Predicted values from model.predict()
+        model_name (str): Model name for display
+        is_test_set (bool): If True, compute R² metric
 
     Returns:
-        tuple: (
-            model_results (dict): Dictionary chứa tất cả các metrics.
-            y_pred_df (pd.DataFrame): DataFrame của các giá trị dự đoán.
-        )
+        tuple: (model_results dict, y_pred_df DataFrame)
     """
-    # Chuyển đổi dự đoán (array) thành DataFrame
+    # Convert predictions to DataFrame
     y_pred_df = pd.DataFrame(
         y_pred_array, 
         index=y_true.index, 
@@ -72,114 +35,175 @@ def calculate_metrics(y_true, y_pred_array, model_name="Model"):
     )
     
     model_results = {}
-    print(f"\n--- Hiệu suất ({model_name}) ---")
+    data_type = "Test" if is_test_set else "Dev"
     
-    # Tính toán metrics cho từng horizon
+    print(f"\n{'='*70}")
+    print(f"Evaluation Results ({data_type} Set) - {model_name}")
+    print(f"{'='*70}")
+    
+    # Calculate metrics for each forecast horizon
+    if PRINT_METRICS_PER_HORIZON:
+        print(f"\nPer-Horizon Metrics:")
+        print(f"{'-'*70}")
+    
     for horizon in TARGET_COLUMNS:
         mae = mean_absolute_error(y_true[horizon], y_pred_df[horizon])
         mse = mean_squared_error(y_true[horizon], y_pred_df[horizon])
         rmse = np.sqrt(mse)
         
+        # MAPE (Mean Absolute Percentage Error)
+        mape = np.mean(np.abs((y_true[horizon] - y_pred_df[horizon]) / y_true[horizon])) * 100
+        
         model_results[f'{horizon}_MAE'] = mae
         model_results[f'{horizon}_RMSE'] = rmse
-        print(f"  {horizon}: MAE = {mae:.4f}, RMSE = {rmse:.4f}")
+        model_results[f'{horizon}_MAPE'] = mape
+        
+        if PRINT_METRICS_PER_HORIZON:
+            print(f"  {horizon}:")
+            print(f"    MAE:  {mae:8.4f}°C")
+            print(f"    RMSE: {rmse:8.4f}°C")
+            print(f"    MAPE: {mape:8.2f}%")
+        
+        # Add R² only for test set
+        if is_test_set:
+            r2 = r2_score(y_true[horizon], y_pred_df[horizon])
+            model_results[f'{horizon}_R2'] = r2
+            if PRINT_METRICS_PER_HORIZON:
+                print(f"    R²:   {r2:8.4f}")
 
-    # Tính toán metrics trung bình
-    avg_mae = mean_absolute_error(y_true, y_pred_df)
-    avg_mse = mean_squared_error(y_true, y_pred_df)
+    # Calculate average metrics across all horizons
+    avg_mae = mean_absolute_error(y_true.values.flatten(), y_pred_df.values.flatten())
+    avg_mse = mean_squared_error(y_true.values.flatten(), y_pred_df.values.flatten())
     avg_rmse = np.sqrt(avg_mse)
+    avg_mape = np.mean(np.abs((y_true.values.flatten() - y_pred_df.values.flatten()) / y_true.values.flatten())) * 100
     
     model_results["Average_MAE"] = avg_mae
     model_results["Average_RMSE"] = avg_rmse
-    print(f"  ---------------------------------")
-    print(f"  Average All Horizons: MAE = {avg_mae:.4f}, RMSE = {avg_rmse:.4f}")
+    model_results["Average_MAPE"] = avg_mape
+    
+    print(f"\n{'-'*70}")
+    print(f"Average Across All Horizons:")
+    print(f"  MAE:  {avg_mae:8.4f}°C")
+    print(f"  RMSE: {avg_rmse:8.4f}°C")
+    print(f"  MAPE: {avg_mape:8.2f}%")
+    
+    # Add average R² only for test set
+    if is_test_set:
+        avg_r2 = r2_score(y_true.values.flatten(), y_pred_df.values.flatten())
+        model_results["Average_R2"] = avg_r2
+        print(f"  R²:   {avg_r2:8.4f}")
+    
+    print(f"{'-'*70}\n")
 
     return model_results, y_pred_df
 
 def visualize_results(y_true, all_predictions):
     """
-    Tạo biểu đồ (scatter và line plot) để so sánh giá trị thực tế
-    với một hoặc nhiều bộ dự đoán. Tương thích với ClearML.
+    Create scatter and line plots comparing actual vs predicted values.
+    Can show all horizons or selected horizons based on config.
 
     Args:
-        y_true (pd.DataFrame): DataFrame chứa giá trị thực tế.
-        all_predictions (dict): Dictionary ('tên_model': y_pred_df).
+        y_true (pd.DataFrame): DataFrame with actual values
+        all_predictions (dict): Dictionary {'model_name': y_pred_df}
     """
+    plt.ioff()  # Turn off interactive mode for ClearML integration
     
-    # Tắt chế độ tương tác để ClearML tự động chụp ảnh biểu đồ
-    plt.ioff() 
+    if VERBOSE_EVALUATION:
+        print(f"\n✓ Creating visualizations...")
     
-    print(f"\n Đang tạo biểu đồ trực quan hóa...")
+    # Determine which horizons to plot
+    if HORIZONS_TO_PLOT is not None:
+        horizons_to_plot = HORIZONS_TO_PLOT
+    elif PLOT_ALL_HORIZONS:
+        horizons_to_plot = TARGET_COLUMNS
+    else:
+        # Default: first and last horizon only
+        horizons_to_plot = [TARGET_COLUMNS[0], TARGET_COLUMNS[-1]]
     
-    # Chỉ vẽ biểu đồ cho horizon đầu tiên và cuối cùng
-    horizons_to_plot = [TARGET_COLUMNS[0], TARGET_COLUMNS[-1]]
-
     for horizon in horizons_to_plot:
+        # ===== Scatter Plot =====
+        plt.figure(figsize=PLOT_FIGSIZE_SCATTER)
         
-        # --- Scatter Plot (Tất cả mô hình trên 1 biểu đồ) ---
-        plt.figure(figsize=(10, 6))
+        for model_name, y_pred_df in all_predictions.items():
+            plt.scatter(y_true[horizon], y_pred_df[horizon], alpha=0.5, label=model_name, s=20)
         
-        for name, y_pred_df in all_predictions.items():
-            plt.scatter(y_true[horizon], y_pred_df[horizon], alpha=0.3, label=name)
+        # Perfect prediction reference line
+        min_val = y_true[horizon].min()
+        max_val = y_true[horizon].max()
+        plt.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='Perfect Prediction')
         
-        # Đường tham chiếu
-        min_val = min(y_true[horizon].min(), y_true[horizon].min())
-        max_val = max(y_true[horizon].max(), y_true[horizon].max())
-        plt.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='Đường hoàn hảo')
-        
-        # Đã xoá title_suffix
-        plt.title(f'Thực tế so với Dự đoán - Horizon: {horizon}')
-        plt.xlabel('Nhiệt độ thực tế (°C)')
-        plt.ylabel('Nhiệt độ dự đoán (°C)')
-        plt.legend()
-        plt.grid(True)
+        plt.title(f'Actual vs Predicted Temperature - {horizon}', fontsize=14, fontweight='bold')
+        plt.xlabel('Actual Temperature (°C)', fontsize=12)
+        plt.ylabel('Predicted Temperature (°C)', fontsize=12)
+        plt.legend(loc='best')
+        plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        # plt.show() # Xoá để ClearML/automation hoạt động
-
-        # --- Line Plot (Tất cả mô hình trên 1 biểu đồ) ---
-        plt.figure(figsize=(15, 7))
         
-        # Vẽ giá trị thực tế
-        plt.plot(y_true.index, y_true[horizon], label=f'Thực tế ({horizon})', color='black', linewidth=2.5)
+        if VERBOSE_EVALUATION:
+            print(f"  • Scatter plot: {horizon}")
         
-        # Vẽ dự đoán của từng mô hình
-        for name, y_pred_df in all_predictions.items():
-            plt.plot(y_pred_df.index, y_pred_df[horizon], label=f'Dự đoán {name}', linestyle='--', linewidth=1.5, alpha=0.8)
-            
-        # Đã xoá title_suffix
-        plt.title(f'Dự đoán nhiệt độ theo thời gian - Horizon: {horizon}')
-        plt.xlabel('Ngày')
-        plt.ylabel('Nhiệt độ (°C)')
-        plt.legend()
-        plt.grid(True)
+        # ===== Time Series Line Plot =====
+        plt.figure(figsize=PLOT_FIGSIZE_TIMESERIES)
+        
+        # Plot actual values
+        plt.plot(y_true.index, y_true[horizon], 
+                label=f'Actual ({horizon})', 
+                color='black', linewidth=2.5, marker='o', markersize=3)
+        
+        # Plot predictions from each model
+        for model_name, y_pred_df in all_predictions.items():
+            plt.plot(y_pred_df.index, y_pred_df[horizon], 
+                    label=f'Predicted ({model_name})', 
+                    linestyle='--', linewidth=1.5, alpha=0.8, marker='.')
+        
+        plt.title(f'Temperature Forecasting Over Time - {horizon}', fontsize=14, fontweight='bold')
+        plt.xlabel('Date', fontsize=12)
+        plt.ylabel('Temperature (°C)', fontsize=12)
+        plt.legend(loc='best')
+        plt.grid(True, alpha=0.3)
         plt.xticks(rotation=45)
         plt.tight_layout()
-        # plt.show() # Xoá để ClearML/automation hoạt động
+        
+        if VERBOSE_EVALUATION:
+            print(f"  • Time series plot: {horizon}")
 
-def save_results_summary(results, output_filename="model_evaluation_results.csv"):
+def save_results_summary(results, output_filename=RESULTS_FILENAME, is_test_set=False):
     """
-    Tổng hợp kết quả từ dictionary và lưu ra file CSV.
+    Consolidate results from dictionary and save to CSV.
 
     Args:
-        results (dict): Dictionary lồng nhau, ví dụ: {'Model 1': {'MAE': 1.0, 'RMSE': 2.0}}.
-        output_filename (str): Tên tệp CSV đầu ra.
+        results (dict): Nested dictionary, e.g., {'Model 1': {'MAE': 1.0, 'RMSE': 2.0}}
+        output_filename (str): Output CSV filename
+        is_test_set (bool): If True, include R² columns
     """
-    print(f"\n Tổng hợp kết quả (Metrics):")
+    if not SAVE_RESULTS:
+        return
+    
+    if VERBOSE_EVALUATION:
+        print(f"\n✓ Summarizing Results:")
+    
     result_df = pd.DataFrame(results).T
     
-    # Sắp xếp các cột để dễ đọc hơn
+    # Order columns for readability
     cols_ordered = []
     for h in TARGET_COLUMNS:
         cols_ordered.append(f'{h}_MAE')
         cols_ordered.append(f'{h}_RMSE')
-    cols_ordered.append('Average_MAE')
-    cols_ordered.append('Average_RMSE')
+        cols_ordered.append(f'{h}_MAPE')
+        if is_test_set:
+            cols_ordered.append(f'{h}_R2')
+    
+    cols_ordered.extend(['Average_MAE', 'Average_RMSE', 'Average_MAPE'])
+    if is_test_set:
+        cols_ordered.append('Average_R2')
     
     final_cols = [c for c in cols_ordered if c in result_df.columns]
     
-    print(result_df[final_cols].round(4))
+    print(result_df[final_cols].round(4).to_string())
     
-    # Lưu kết quả ra file
-    output_path = os.path.join(DATA_DIR, output_filename)
+    # Save to file
+    output_path = os.path.join(RESULTS_DIR, output_filename)
     result_df[final_cols].round(4).to_csv(output_path)
-    print(f"\nĐã lưu kết quả đánh giá vào '{output_path}'")
+    
+    if VERBOSE_EVALUATION:
+        print(f"\n✓ Results saved to '{output_path}'")

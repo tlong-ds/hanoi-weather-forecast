@@ -5,27 +5,13 @@ warnings.filterwarnings("ignore")
 import optuna
 import numpy as np
 from clearml import Task, Logger
-from model_train import load_processed_data
-from model_evaluate import load_data
+from model_helper import load_data, DEVICE
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, mean_absolute_percentage_error
-
-# ====== Optional imports ======
-try:
-    from xgboost import XGBRegressor
-except ImportError:
-    XGBRegressor = None
-
-try:
-    from lightgbm import LGBMRegressor
-except ImportError:
-    LGBMRegressor = None
-
-try:
-    from catboost import CatBoostRegressor
-except ImportError:
-    CatBoostRegressor = None
+from xgboost import XGBRegressor
+from lightgbm import LGBMRegressor
+from catboost import CatBoostRegressor
 
 
 # =============== BƯỚC 1: KHỞI TẠO CLEARML TASK ===============
@@ -34,9 +20,8 @@ task = Task.init(
     task_name="Optuna_Tuning_4Models"
 )
 
-
 # =============== BƯỚC 2: TẢI DỮ LIỆU ===============
-X_train, y_train = load_processed_data()
+X_train, y_train = load_data('train')
 X_dev, y_dev = load_data('dev')
 
 if X_train is None or X_dev is None:
@@ -44,38 +29,6 @@ if X_train is None or X_dev is None:
 
 print(f"✅ Dữ liệu train: {X_train.shape}, target: {y_train.shape}")
 print(f"✅ Dữ liệu dev: {X_dev.shape}, target: {y_dev.shape}")
-
-
-# =============== GPU CHECK HELPERS ===============
-def _check_gpu_xgb():
-    try:
-        import xgboost as xgb
-        model = xgb.XGBRegressor(tree_method="gpu_hist", device="cuda")
-        model.fit([[0, 0]], [0])
-        return True
-    except Exception:
-        return False
-
-
-def _check_gpu_lgbm():
-    try:
-        from lightgbm import LGBMRegressor
-        m = LGBMRegressor(device="gpu")
-        m.fit([[0, 0]], [0])
-        return True
-    except Exception:
-        return False
-
-
-def _check_gpu_catboost():
-    try:
-        from catboost import CatBoostRegressor
-        m = CatBoostRegressor(task_type="GPU", iterations=5, verbose=0)
-        m.fit([[0, 0]], [0])
-        return True
-    except Exception:
-        return False
-
 
 # =============== BƯỚC 3: ĐỊNH NGHĨA OBJECTIVE FUNCTION (OPTUNA) ===============
 def objective(trial):
@@ -97,22 +50,20 @@ def objective(trial):
 
     # -------- XGBOOST --------
     elif model_name == "XGBoost" and XGBRegressor is not None:
-        gpu_ok = _check_gpu_xgb()
         params = {
             "n_estimators": trial.suggest_int("n_estimators", 200, 600, step=100),
             "max_depth": trial.suggest_int("max_depth", 4, 10),
-            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2),
+            "learning_  rate": trial.suggest_float("learning_rate", 0.01, 0.2),
             "subsample": trial.suggest_float("subsample", 0.6, 1.0),
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
-            "tree_method": "gpu_hist" if gpu_ok else "hist",
-            "device": "cuda" if gpu_ok else "cpu",
+            "tree_method": "gpu_hist" if str(DEVICE) != "cpu" else "hist",
+            "device": str(DEVICE),
             "random_state": 42,
         }
         model = MultiOutputRegressor(XGBRegressor(**params))
 
     # -------- LIGHTGBM --------
     elif model_name == "LightGBM" and LGBMRegressor is not None:
-        gpu_ok = _check_gpu_lgbm()
         params = {
             "n_estimators": trial.suggest_int("n_estimators", 200, 600, step=100),
             "num_leaves": trial.suggest_int("num_leaves", 20, 60),
@@ -122,7 +73,7 @@ def objective(trial):
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
             "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 5.0),
             "reg_lambda": trial.suggest_float("reg_lambda", 0.0, 5.0),
-            "device": "gpu" if gpu_ok else "cpu",
+            "device": "cuda" if str(DEVICE) == "cuda" else "cpu",
             "n_jobs": -1,
             "random_state": 42,
         }
@@ -130,7 +81,6 @@ def objective(trial):
 
     # -------- CATBOOST --------
     elif model_name == "CatBoost" and CatBoostRegressor is not None:
-        gpu_ok = _check_gpu_catboost()
         params = {
             "iterations": trial.suggest_int("iterations", 200, 600, step=100),
             "depth": trial.suggest_int("depth", 4, 10),
@@ -139,7 +89,7 @@ def objective(trial):
             "bootstrap_type": "Bernoulli",
             "subsample": trial.suggest_float("subsample", 0.6, 1.0),
             "loss_function": "RMSE",
-            "task_type": "GPU" if gpu_ok else "CPU",
+            "task_type": "GPU" if str(DEVICE) != "cpu" else "CPU",
             "verbose": 0,
             "random_state": 42,
         }
@@ -154,16 +104,14 @@ def objective(trial):
 
     rmse = np.sqrt(mean_squared_error(y_dev, y_pred))
     mae = mean_absolute_error(y_dev, y_pred)
-    r2 = r2_score(y_dev, y_pred)
     mape = mean_absolute_percentage_error(y_dev, y_pred)
 
     # -------- Log ClearML --------
     Logger.current_logger().report_scalar("RMSE", model_name, rmse, trial.number)
     Logger.current_logger().report_scalar("MAE", model_name, mae, trial.number)
-    Logger.current_logger().report_scalar("R2", model_name, r2, trial.number)
     Logger.current_logger().report_scalar("MAPE", model_name, mape, trial.number)
 
-    print(f"✅ Trial {trial.number} | {model_name}: RMSE={rmse:.4f}, MAE={mae:.4f}, R²={r2:.4f}, MAPE={mape:.4f}")
+    print(f"✅ Trial {trial.number} | {model_name}: RMSE={rmse:.4f}, MAE={mae:.4f}, MAPE={mape:.4f}")
     return rmse  # minimize RMSE
 
 
