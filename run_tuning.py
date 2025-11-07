@@ -73,7 +73,7 @@ def objective(trial):
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
             "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 5.0),
             "reg_lambda": trial.suggest_float("reg_lambda", 0.0, 5.0),
-            "device": "cuda" if str(DEVICE) == "cuda" else "cpu",
+            "device": "cpu",
             "n_jobs": -1,
             "random_state": 42,
         }
