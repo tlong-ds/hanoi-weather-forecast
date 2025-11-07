@@ -54,33 +54,47 @@ RANDOM_STATE = 42
 
 # Model configurations
 MODEL_CONFIGS = {
-    'Random Forest': {
+    # 'Random Forest': {
+    #     'params': {
+    #         'n_estimators': 200,
+    #         'max_depth': 12,
+    #         'min_samples_split': 4,
+    #         'random_state': RANDOM_STATE,
+    #         'n_jobs': -1,
+    #         'verbose': 0
+    #     },
+    #     'enabled': True,
+    #     'description': 'Ensemble tree-based model'
+    # },
+    # 'XGBoost': {
+    #     'params': {
+    #         'n_estimators': 300,
+    #         'max_depth': 6,
+    #         'learning_rate': 0.05,
+    #         'subsample': 0.8,
+    #         'colsample_bytree': 0.8,
+    #         'random_state': RANDOM_STATE,
+    #         'n_jobs': -1,
+    #         'verbosity': 0
+    #     },
+    #     'enabled': True,
+    #     'description': 'Gradient boosting model with multi-output wrapper'
+    # },
+    "CatBoost": {
         'params': {
-            'n_estimators': 200,
-            'max_depth': 12,
-            'min_samples_split': 4,
-            'random_state': RANDOM_STATE,
-            'n_jobs': -1,
-            'verbose': 0
+            'iterations': 400, 
+            'depth': 6, 
+            'learning_rate': 0.016517575668639525, 
+            'l2_leaf_reg': 1.8809861076799286, 
+            'subsample': 0.711841663235127,
+            "random_state": RANDOM_STATE,
+            "verbose": 0,
+            "task_type": "GPU" if str(DEVICE) == "cuda" else "CPU",
         },
         'enabled': True,
-        'description': 'Ensemble tree-based model'
-    },
-    'XGBoost': {
-        'params': {
-            'n_estimators': 300,
-            'max_depth': 6,
-            'learning_rate': 0.05,
-            'subsample': 0.8,
-            'colsample_bytree': 0.8,
-            'random_state': RANDOM_STATE,
-            'n_jobs': -1,
-            'verbosity': 0
-        },
-        'enabled': True,
-        'description': 'Gradient boosting model with multi-output wrapper'
-    },
-    
+        'description': 'CatBoost Regressor with multi-output wrapper'
+    }
+        
 }
 
 # ============================================================================
@@ -90,7 +104,8 @@ MODEL_CONFIGS = {
 # Training options
 SAVE_MODELS = True  # Save trained models to disk
 LOAD_SAVED_MODELS = False  # Load pre-trained models if available
-MODEL_FORMAT = 'joblib'  # 'joblib' or 'pickle'
+MODEL_FORMAT = 'onnx'  # 'onnx', 'joblib', or 'pickle'
+CONVERT_TO_ONNX = True  # Convert sklearn/XGBoost models to ONNX format
 
 # ============================================================================
 # EVALUATION CONFIGURATION
@@ -119,6 +134,14 @@ PLOT_FIGSIZE_TIMESERIES = (16, 8)
 
 # Horizons to plot (None = all, or specify list like [1, 5, 10])
 HORIZONS_TO_PLOT = None  # None means plot all horizons
+
+# Plot saving configuration
+SAVE_PLOTS = True  # Save plots to disk
+PLOTS_DIR = 'plots'  # Directory to save plots
+PLOT_FORMAT = 'png'  # Format: 'png', 'jpg', 'pdf', 'svg'
+
+# Ensure plots directory exists
+os.makedirs(PLOTS_DIR, exist_ok=True)
 
 # ============================================================================
 # LOGGING CONFIGURATION

@@ -3,13 +3,107 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-
+from model_helper import load_data
 # Import configuration and helper functions
 from model_helper import (
     TARGET_COLUMNS, SAVE_RESULTS, RESULTS_FILENAME, RESULTS_DIR,
     PLOT_ALL_HORIZONS, HORIZONS_TO_PLOT, VERBOSE_EVALUATION,
     PRINT_METRICS_PER_HORIZON, PLOT_FIGSIZE_SCATTER, PLOT_FIGSIZE_TIMESERIES,
+    MODELS_DIR, get_enabled_models, SAVE_PLOTS, PLOTS_DIR, PLOT_FORMAT, PLOT_DPI
 )
+import joblib
+
+
+def load_trained_models():
+    """
+    Load previously trained models from disk.
+    
+    Supports multiple formats:
+    - ONNX format (.onnx) with joblib backup
+    - Joblib format (.joblib)
+    - Pickle format (.pkl)
+    
+    Returns:
+        dict: Dictionary of loaded models {model_name: model_object}
+              Empty dict if no models found or loading fails
+    
+    Raises:
+        FileNotFoundError: If MODELS_DIR doesn't exist
+    """
+    loaded_models = {}
+    
+    if not os.path.exists(MODELS_DIR):
+        print(f"✗ Models directory not found: {MODELS_DIR}")
+        return loaded_models
+    
+    print(f"\n{'='*70}")
+    print(f"Loading trained models from '{MODELS_DIR}/'...")
+    print(f"{'='*70}\n")
+    
+    try:
+        # Try to load models for each enabled model type
+        for model_name in get_enabled_models().keys():
+            model_filename = f"{model_name.replace(' ', '_').replace('(', '').replace(')', '').lower()}"
+            
+            # Try loading in order of preference: backup joblib -> joblib -> pickle -> ONNX
+            backup_path = os.path.join(MODELS_DIR, f"{model_filename}_backup.joblib")
+            joblib_path = os.path.join(MODELS_DIR, f"{model_filename}.joblib")
+            pickle_path = os.path.join(MODELS_DIR, f"{model_filename}.pkl")
+            onnx_path = os.path.join(MODELS_DIR, f"{model_filename}.onnx")
+            
+            model = None
+            loaded_from = None
+            
+            # Priority 1: Backup joblib (for ONNX-converted models)
+            if os.path.exists(backup_path):
+                try:
+                    model = joblib.load(backup_path)
+                    loaded_from = "backup joblib (ONNX model)"
+                except Exception as e:
+                    print(f"  ⚠️  Failed to load {model_name} from backup: {e}")
+            
+            # Priority 2: Regular joblib
+            if model is None and os.path.exists(joblib_path):
+                try:
+                    model = joblib.load(joblib_path)
+                    loaded_from = "joblib"
+                except Exception as e:
+                    print(f"  ⚠️  Failed to load {model_name} from joblib: {e}")
+            
+            # Priority 3: Pickle
+            if model is None and os.path.exists(pickle_path):
+                try:
+                    import pickle
+                    with open(pickle_path, 'rb') as f:
+                        model = pickle.load(f)
+                    loaded_from = "pickle"
+                except Exception as e:
+                    print(f"  ⚠️  Failed to load {model_name} from pickle: {e}")
+            
+            # Priority 4: ONNX (warning: requires ONNX runtime, returns reference only)
+            if model is None and os.path.exists(onnx_path):
+                print(f"  ℹ️  {model_name}: ONNX file exists but requires ONNX Runtime for inference")
+                print(f"      Use backup joblib instead (recommended)")
+                continue
+            
+            # Report result
+            if model is not None:
+                loaded_models[model_name] = model
+                print(f"  ✓ {model_name:<20} loaded from {loaded_from}")
+            else:
+                print(f"  ✗ {model_name:<20} not found (no saved model file)")
+    
+    except Exception as e:
+        print(f"\n✗ Error loading models: {e}")
+    
+    print(f"\n{'='*70}")
+    print(f"Loaded {len(loaded_models)} model(s) successfully")
+    print(f"{'='*70}\n")
+    
+    if not loaded_models:
+        print("⚠️  No trained models found. Please train models first using model_train.py")
+    
+    return loaded_models
 
 def calculate_metrics(y_true, y_pred_array, model_name="Model", is_test_set=False):
     """
@@ -101,6 +195,7 @@ def visualize_results(y_true, all_predictions):
     """
     Create scatter and line plots comparing actual vs predicted values.
     Can show all horizons or selected horizons based on config.
+    Optionally saves plots to disk.
 
     Args:
         y_true (pd.DataFrame): DataFrame with actual values
@@ -120,9 +215,9 @@ def visualize_results(y_true, all_predictions):
         # Default: first and last horizon only
         horizons_to_plot = [TARGET_COLUMNS[0], TARGET_COLUMNS[-1]]
     
-    for horizon in horizons_to_plot:
+    for idx, horizon in enumerate(horizons_to_plot, 1):
         # ===== Scatter Plot =====
-        plt.figure(figsize=PLOT_FIGSIZE_SCATTER)
+        fig_scatter = plt.figure(figsize=PLOT_FIGSIZE_SCATTER)
         
         for model_name, y_pred_df in all_predictions.items():
             plt.scatter(y_true[horizon], y_pred_df[horizon], alpha=0.5, label=model_name, s=20)
@@ -139,16 +234,26 @@ def visualize_results(y_true, all_predictions):
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         
-        if VERBOSE_EVALUATION:
-            print(f"  • Scatter plot: {horizon}")
+        # Save scatter plot
+        if SAVE_PLOTS:
+            scatter_filename = f"scatter_{horizon}.{PLOT_FORMAT}"
+            scatter_path = os.path.join(PLOTS_DIR, scatter_filename)
+            plt.savefig(scatter_path, dpi=PLOT_DPI, format=PLOT_FORMAT, bbox_inches='tight')
+            if VERBOSE_EVALUATION:
+                print(f"  ✓ Scatter plot saved: {scatter_path}")
+        else:
+            if VERBOSE_EVALUATION:
+                print(f"  • Scatter plot: {horizon}")
+        
+        plt.close(fig_scatter)
         
         # ===== Time Series Line Plot =====
-        plt.figure(figsize=PLOT_FIGSIZE_TIMESERIES)
+        fig_ts = plt.figure(figsize=PLOT_FIGSIZE_TIMESERIES)
         
         # Plot actual values
         plt.plot(y_true.index, y_true[horizon], 
                 label=f'Actual ({horizon})', 
-                color='black', linewidth=2.5, marker='o', markersize=3)
+                color='black', linewidth=1, marker='o', markersize=3)
         
         # Plot predictions from each model
         for model_name, y_pred_df in all_predictions.items():
@@ -164,8 +269,21 @@ def visualize_results(y_true, all_predictions):
         plt.xticks(rotation=45)
         plt.tight_layout()
         
-        if VERBOSE_EVALUATION:
-            print(f"  • Time series plot: {horizon}")
+        # Save time series plot
+        if SAVE_PLOTS:
+            ts_filename = f"timeseries_{horizon}.{PLOT_FORMAT}"
+            ts_path = os.path.join(PLOTS_DIR, ts_filename)
+            plt.savefig(ts_path, dpi=PLOT_DPI, format=PLOT_FORMAT, bbox_inches='tight')
+            if VERBOSE_EVALUATION:
+                print(f"  ✓ Time series plot saved: {ts_path}")
+        else:
+            if VERBOSE_EVALUATION:
+                print(f"  • Time series plot: {horizon}")
+        
+        plt.close(fig_ts)
+    
+    if SAVE_PLOTS and VERBOSE_EVALUATION:
+        print(f"\n✓ All plots saved to '{PLOTS_DIR}/' directory")
 
 def save_results_summary(results, output_filename=RESULTS_FILENAME, is_test_set=False):
     """
@@ -207,3 +325,21 @@ def save_results_summary(results, output_filename=RESULTS_FILENAME, is_test_set=
     
     if VERBOSE_EVALUATION:
         print(f"\n✓ Results saved to '{output_path}'")
+
+if __name__ == "__main__":
+    # Example usage (assuming data loading functions are defined elsewhere)
+    X_test, y_test = load_data('test')
+    
+    trained_models = load_trained_models()  # Placeholder function to load models
+    all_model_predictions = {}
+    all_model_results = {}
+    
+    # Example model evaluation loop
+    for model_name, model in trained_models.items():
+        y_test_pred = model.predict(X_test)
+        test_results, y_test_pred_df = calculate_metrics(y_test, y_test_pred, model_name=model_name, is_test_set=True)
+        all_model_results[f"{model_name}_Test"] = test_results
+        all_model_predictions[f"{model_name}_Test"] = y_test_pred_df
+    
+    visualize_results(y_test, all_model_predictions)
+    save_results_summary(all_model_results, output_filename=RESULTS_FILENAME, is_test_set=True)
