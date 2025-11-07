@@ -89,7 +89,7 @@ def objective(trial):
             "bootstrap_type": "Bernoulli",
             "subsample": trial.suggest_float("subsample", 0.6, 1.0),
             "loss_function": "RMSE",
-            "task_type": "GPU" if str(DEVICE) != "cpu" else "CPU",
+            "task_type": "GPU" if str(DEVICE) != "cuda" else "CPU",
             "verbose": 0,
             "random_state": 42,
         }
