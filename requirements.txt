@@ -21,3 +21,4 @@ xgboost
 lightgbm
 catboost
 optuna
+onnxruntime
