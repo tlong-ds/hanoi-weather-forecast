@@ -10,6 +10,62 @@ from sklearn.linear_model import LassoCV
 from sklearn.ensemble import RandomForestRegressor
 import os
 
+# ============================================================================
+# CONFIGURATION CONSTANTS
+# ============================================================================
+
+# Feature Engineering Configuration
+ROLLING_WINDOWS = [7, 14, 21, 28, 56, 84]  # Days for rolling statistics
+LAG_PERIODS = {
+    'temp': [1, 3, 7],
+    'dew': [1, 3, 7],
+    'humidity': [1, 3, 7],
+    'sealevelpressure': [1, 3, 7],
+    'windspeed': [1, 3, 7],
+    'precip': [1, 3, 7],
+    'cloudcover': [1, 3, 7],
+    'winddir_sin': [1, 3, 7],
+    'winddir_cos': [1, 3, 7],
+}
+CAT_LAG_PERIODS = [1, 3]  # Lags for categorical (encoded) features
+
+# Data Splitting Configuration
+TRAIN_RATIO = 0.7
+DEV_RATIO = 0.15
+TEST_RATIO = 0.15
+
+# Target Creation Configuration
+N_STEPS_AHEAD = 10 # Predict 10 days ahead
+TARGET_COLUMN = 'temp'
+
+# Feature Selection Configuration
+FEATURE_SELECTION_TOP_N = 30
+LASSO_CV_FOLDS = 5
+RANDOM_FOREST_N_ESTIMATORS = 100
+RANDOM_STATE = 42
+
+# Data Quality Configuration
+OUTLIER_IQR_MULTIPLIER = 1.5
+CATEGORICAL_FEATURES = ['icon']
+
+# Seasonal Months Configuration (for Hanoi's climate)
+SEASON_CONFIG = {
+    'summer': [4, 5, 6],  
+    'autumn': [7, 8, 9],  
+    'winter': [10, 11, 12],  
+    'spring': [1, 2, 3]  
+}
+
+# Columns to Drop (Data Leakage Prevention)
+LEAKAGE_COLUMNS = [
+    'tempmax', 'tempmin', 'feelslikemax', 'feelslikemin', 'feelslike',
+    'name', 'stations', 'source', 'season',
+    'conditions', 'description',
+    'preciptype', 'snow', 'snowdepth', 'severerisk'
+]
+
+# ============================================================================
+
 def load_data(file_path):
     """Loads weather data from a CSV file."""
     daily_data = pd.read_csv(file_path)
@@ -18,10 +74,10 @@ def load_data(file_path):
     daily_data = daily_data.sort_index(ascending=True)
     return daily_data
 
-def split_data(daily_data):
+def split_data(daily_data, train_ratio=TRAIN_RATIO, dev_ratio=DEV_RATIO):
     """Splits the data into training, development, and test sets."""
-    train_size = int(len(daily_data) * 0.7)
-    dev_size = int(len(daily_data) * 0.15)
+    train_size = int(len(daily_data) * train_ratio)
+    dev_size = int(len(daily_data) * dev_ratio)
     
     train_data = daily_data.iloc[:train_size]
     dev_data = daily_data.iloc[train_size:train_size + dev_size]
@@ -29,21 +85,11 @@ def split_data(daily_data):
     
     return train_data, dev_data, test_data
 
-def remove_leakage_columns(df):
+def remove_leakage_columns(df, cols_to_drop=LEAKAGE_COLUMNS):
     """
     Remove columns that cause data leakage or are non-informative.
     (Based on the provided data definition)
     """
-    cols_to_drop = [
-        'tempmax', 'tempmin', 'feelslikemax', 'feelslikemin', 'feelslike', 
-        
-        # Non-numeric or descriptive
-        'name', 'stations', 'source', 'season',
-        'conditions', 'description',
-        
-        # Other potential drops (can be tested later)
-        'preciptype', 'snow', 'snowdepth', 'severerisk'
-    ]
     df_clean = df.drop(columns=[c for c in cols_to_drop if c in df.columns], errors='ignore')
     return df_clean
 
@@ -62,11 +108,32 @@ def create_day_length_feature(df):
     # If columns don't exist or were already dropped, do nothing
     return df_new
 
-def create_temporal_features(df):
+def create_cyclical_wind_direction(df):
+    """
+    Transform wind direction (degrees: 0-360) into cyclical sine and cosine components.
+    This prevents treating 359° and 1° as far apart (they're only 2° apart).
+    
+    Wind direction is measured in degrees: 0°=North, 90°=East, 180°=South, 270°=West
+    """
+    df_new = df.copy()
+    if 'winddir' in df_new.columns:
+        # Convert degrees to radians, then to sin/cos for cyclical encoding
+        winddir_rad = np.radians(df_new['winddir'])
+        df_new['winddir_sin'] = np.sin(winddir_rad)
+        df_new['winddir_cos'] = np.cos(winddir_rad)
+        # Optionally drop original winddir column if you only want the cyclical components
+        # df_new = df_new.drop(columns=['winddir'])
+    return df_new
+
+def create_temporal_features(df, season_config=SEASON_CONFIG):
     """
     Create comprehensive time-based features based on EDA insights.
     Captures seasonal patterns, monsoon cycles, and temporal interactions
     while minimizing redundancy.
+    
+    Args:
+        df: Input DataFrame with datetime index
+        season_config: Dictionary with seasonal month configurations
     """
     df_new = df.copy()
     
@@ -91,15 +158,11 @@ def create_temporal_features(df):
     df_new['week_sin'] = np.sin(2 * np.pi * df_new['week_of_year'] / 52)
     df_new['week_cos'] = np.cos(2 * np.pi * df_new['week_of_year'] / 52)
     
-    # 4. Domain-Specific Indicators (Your excellent EDA features)
+    # 4. Domain-Specific Indicators (Based on seasonal configuration)
     
-    # Temperature-based seasons
-    df_new['is_hot_month'] = df_new['month'].isin([5, 6, 7, 8]).astype(int)
-    df_new['is_cool_month'] = df_new['month'].isin([12, 1, 2]).astype(int)
-    
-    # Rainfall/Monsoon-based seasons
-    df_new['is_monsoon_season'] = df_new['month'].isin([5, 6, 7, 8, 9]).astype(int)
-    df_new['is_dry_season'] = df_new['month'].isin([11, 12, 1, 2, 3]).astype(int)
+    # Create season indicators from config
+    for season_name, months in season_config.items():
+        df_new[f'is_{season_name}'] = df_new['month'].isin(months).astype(int)
     
     # 5. Drop the Redundant Original Columns
     # The _sin/_cos features have replaced them.
@@ -109,107 +172,40 @@ def create_temporal_features(df):
     
     return df_new
 
-def create_lag_features(df):
+def create_lag_features(df, lag_config=LAG_PERIODS):
     """
     Create lag features to capture previous days' conditions.
     """
     df_new = df.copy()
 
-    # Define lag configuration
-    USE_LAGS = {
-        'temp': [1, 3, 7],   
-        'dew': [1, 3, 7],        
-        'humidity': [1, 3, 7], 
-        'sealevelpressure': [1, 3, 7],         
-        'windspeed': [1, 3, 7],
-        'precip': [1, 3, 7],
-        'cloudcover': [1, 3, 7],
-        'winddir_sin': [1, 3, 7],
-        'winddir_cos': [1, 3, 7],     
-    }
-    
-    for base_col, lags in USE_LAGS.items():
-        if base_col in df_new.columns:
+    for feature, lags in lag_config.items():
+        if feature in df_new.columns:
             for lag in lags:
-                df_new[f'{base_col}_lag{lag}'] = df_new[base_col].shift(lag)
+                df_new[f'{feature}_lag{lag}'] = df_new[feature].shift(lag)
     
     return df_new
 
-def create_rolling_features(df):
+def create_rolling_features(df, features=None, windows=ROLLING_WINDOWS):
     """
     Create rolling window features to capture trends.
+    
+    Args:
+        df: Input DataFrame
+        features: List of features to create rolling stats for. Defaults to 
+                 ['precip', 'humidity', 'windspeed', 'sealevelpressure', 'cloudcover']
+        windows: List of window sizes for rolling statistics
     """
+    if features is None:
+        features = ['precip', 'humidity', 'windspeed', 'sealevelpressure', 'cloudcover']
+    
     df_new = df.copy()
-    
-    if 'precip' in df_new.columns:
-        df_new['precip_roll_mean_7'] = df_new['precip'].shift(1).rolling(7).mean()
-        df_new['precip_roll_std_7'] = df_new['precip'].shift(1).rolling(7).std()
-        df_new['precip_roll_mean_14'] = df_new['precip'].shift(1).rolling(14).mean()
-        df_new['precip_roll_std_14'] = df_new['precip'].shift(1).rolling(14).std()
-        df_new['precip_roll_mean_21'] = df_new['precip'].shift(1).rolling(21).mean()
-        df_new['precip_roll_std_21'] = df_new['precip'].shift(1).rolling(21).std()
-        df_new['precip_roll_mean_28'] = df_new['precip'].shift(1).rolling(28).mean()
-        df_new['precip_roll_std_28'] = df_new['precip'].shift(1).rolling(28).std()
-        df_new['precip_roll_mean_56'] = df_new['precip'].shift(1).rolling(56).mean()
-        df_new['precip_roll_std_56'] = df_new['precip'].shift(1).rolling(56).std()
-        df_new['precip_roll_mean_84'] = df_new['precip'].shift(1).rolling(84).mean()
-        df_new['precip_roll_std_84'] = df_new['precip'].shift(1).rolling(84).std()
-    
-    if 'humidity' in df_new.columns:
-        df_new['humidity_roll_mean_7'] = df_new['humidity'].shift(1).rolling(7).mean()
-        df_new['humidity_roll_std_7'] = df_new['humidity'].shift(1).rolling(7).std()
-        df_new['humidity_roll_mean_14'] = df_new['humidity'].shift(1).rolling(14).mean()
-        df_new['humidity_roll_std_14'] = df_new['humidity'].shift(1).rolling(14).std()
-        df_new['humidity_roll_mean_21'] = df_new['humidity'].shift(1).rolling(21).mean()
-        df_new['humidity_roll_std_21'] = df_new['humidity'].shift(1).rolling(21).std()
-        df_new['humidity_roll_mean_28'] = df_new['humidity'].shift(1).rolling(28).mean()
-        df_new['humidity_roll_std_28'] = df_new['humidity'].shift(1).rolling(28).std()
-        df_new['humidity_roll_mean_56'] = df_new['humidity'].shift(1).rolling(56).mean()
-        df_new['humidity_roll_std_56'] = df_new['humidity'].shift(1).rolling(56).std()
-        df_new['humidity_roll_mean_84'] = df_new['humidity'].shift(1).rolling(84).mean()
-        df_new['humidity_roll_std_84'] = df_new['humidity'].shift(1).rolling(84).std()
-    
-    if 'windspeed' in df_new.columns:
-        df_new['windspeed_roll_mean_7'] = df_new['windspeed'].shift(1).rolling(7).mean()
-        df_new['windspeed_roll_std_7'] = df_new['windspeed'].shift(1).rolling(7).std()
-        df_new['windspeed_roll_mean_14'] = df_new['windspeed'].shift(1).rolling(14).mean()
-        df_new['windspeed_roll_std_14'] = df_new['windspeed'].shift(1).rolling(14).std()
-        df_new['windspeed_roll_mean_21'] = df_new['windspeed'].shift(1).rolling(21).mean()
-        df_new['windspeed_roll_std_21'] = df_new['windspeed'].shift(1).rolling(21).std()
-        df_new['windspeed_roll_mean_28'] = df_new['windspeed'].shift(1).rolling(28).mean()
-        df_new['windspeed_roll_std_28'] = df_new['windspeed'].shift(1).rolling(28).std()
-        df_new['windspeed_roll_mean_56'] = df_new['windspeed'].shift(1).rolling(56).mean()
-        df_new['windspeed_roll_std_56'] = df_new['windspeed'].shift(1).rolling(56).std()
-        df_new['windspeed_roll_mean_84'] = df_new['windspeed'].shift(1).rolling(84).mean()
-        df_new['windspeed_roll_std_84'] = df_new['windspeed'].shift(1).rolling(84).std()
 
-    if 'sealevelpressure' in df_new.columns:
-        df_new['sealevelpressure_roll_mean_7'] = df_new['sealevelpressure'].shift(1).rolling(7).mean()
-        df_new['sealevelpressure_roll_std_7'] = df_new['sealevelpressure'].shift(1).rolling(7).std()
-        df_new['sealevelpressure_roll_mean_14'] = df_new['sealevelpressure'].shift(1).rolling(14).mean()
-        df_new['sealevelpressure_roll_std_14'] = df_new['sealevelpressure'].shift(1).rolling(14).std()
-        df_new['sealevelpressure_roll_mean_21'] = df_new['sealevelpressure'].shift(1).rolling(21).mean()
-        df_new['sealevelpressure_roll_std_21'] = df_new['sealevelpressure'].shift(1).rolling(21).std()
-        df_new['sealevelpressure_roll_mean_28'] = df_new['sealevelpressure'].shift(1).rolling(28).mean()
-        df_new['sealevelpressure_roll_std_28'] = df_new['sealevelpressure'].shift(1).rolling(28).std()
-        df_new['sealevelpressure_roll_mean_56'] = df_new['sealevelpressure'].shift(1).rolling(56).mean()
-        df_new['sealevelpressure_roll_std_56'] = df_new['sealevelpressure'].shift(1).rolling(56).std()
-        df_new['sealevelpressure_roll_mean_84'] = df_new['sealevelpressure'].shift(1).rolling(84).mean()
-        df_new['sealevelpressure_roll_std_84'] = df_new['sealevelpressure'].shift(1).rolling(84).std()
-    
-    if 'cloudcover' in df_new.columns:
-        df_new['cloudcover_roll_mean_7'] = df_new['cloudcover'].shift(1).rolling(7).mean()
-        df_new['cloudcover_roll_std_7'] = df_new['cloudcover'].shift(1).rolling(7).std()
-        df_new['cloudcover_roll_mean_14'] = df_new['cloudcover'].shift(1).rolling(14).mean()
-        df_new['cloudcover_roll_std_14'] = df_new['cloudcover'].shift(1).rolling(14).std()
-        df_new['cloudcover_roll_mean_21'] = df_new['cloudcover'].shift(1).rolling(21).mean()
-        df_new['cloudcover_roll_std_21'] = df_new['cloudcover'].shift(1).rolling(21).std()
-        df_new['cloudcover_roll_mean_28'] = df_new['cloudcover'].shift(1).rolling(28).mean()
-        df_new['cloudcover_roll_std_28'] = df_new['cloudcover'].shift(1).rolling(28).std()
-        df_new['cloudcover_roll_mean_56'] = df_new['cloudcover'].shift(1).rolling(56).mean()
-        df_new['cloudcover_roll_std_56'] = df_new['cloudcover'].shift(1).rolling(56).std()
-        df_new['cloudcover_roll_mean_84'] = df_new['cloudcover'].shift(1).rolling(84).mean()
-        df_new['cloudcover_roll_std_84'] = df_new['cloudcover'].shift(1).rolling(84).std()
+    for feature in features:
+        if feature in df_new.columns:
+            for window in windows:
+                df_new[f'{feature}_roll_mean_{window}'] = df_new[feature].shift(1).rolling(window).mean()
+                df_new[f'{feature}_roll_std_{window}'] = df_new[feature].shift(1).rolling(window).std()
+
     return df_new
 
 def create_interaction_features(df):
@@ -232,25 +228,35 @@ def create_interaction_features(df):
     
     return df_new
 
-def encode_categorical_features(df, train_df):
+def encode_categorical_features(df, train_df, cat_cols=None):
     """
-    One-hot encodes the 'icon' column using OneHotEncoder.
+    One-hot encodes categorical columns using OneHotEncoder.
+    Fits encoder ONLY on training data to prevent leakage.
     Fills 'none' for missing values.
-    """
-    df_new = df.copy()
-    cat_cols = ['icon']
     
-    if 'icon' not in df_new.columns:
+    Args:
+        df: DataFrame to transform
+        train_df: Training DataFrame (used to fit encoder)
+        cat_cols: List of categorical columns. Defaults to ['icon']
+    
+    Returns:
+        df_new: DataFrame with encoded columns
+        encoded_cols: Array of new encoded column names
+    """
+    if cat_cols is None:
+        cat_cols = CATEGORICAL_FEATURES
+    
+    df_new = df.copy()
+    
+    # Check if any categorical columns exist
+    if not any(col in df_new.columns for col in cat_cols):
         return df_new, []
 
     # Use OneHotEncoder to handle unseen values gracefully
     # This is more robust than pd.get_dummies
     encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
     
-    # Fill NaNs with 'none' and fit/transform
-    encoded_arr = encoder.fit(df_new[cat_cols].fillna('none').astype(str))
-    
-    # Fit ONLY on the training data
+    # Fit ONLY on the training data (prevents leakage)
     encoder.fit(train_df[cat_cols].fillna('none').astype(str))
     
     # Transform the current dataset (df)
@@ -267,9 +273,17 @@ def encode_categorical_features(df, train_df):
     # Return the new dataframe and the names of the new columns
     return df_new, encoded_cols
 
-def create_lagged_cat_features(df, encoded_cols, lags=[1, 3]):
+def create_lagged_cat_features(df, encoded_cols, lags=CAT_LAG_PERIODS):
     """
     Creates lagged features for the encoded categorical columns.
+    
+    Args:
+        df: Input DataFrame with encoded categorical columns
+        encoded_cols: List of encoded column names to lag
+        lags: List of lag periods to create
+    
+    Returns:
+        df_new: DataFrame with lagged categorical features (original dropped)
     """
     df_new = df.copy()
     for col in encoded_cols:
@@ -280,17 +294,26 @@ def create_lagged_cat_features(df, encoded_cols, lags=[1, 3]):
     df_new = df_new.drop(columns=encoded_cols)
     return df_new
 
-def create_multiday_target(df, target_col='temp', n_steps_out=5):
+def create_multiday_target(df, target_col=TARGET_COLUMN, n_steps_out=N_STEPS_AHEAD):
     """
     Creates a target DataFrame for multi-step forecasting.
     Predicts t+1 through t+n_steps_out.
+    
+    Args:
+        df: Input DataFrame with target column
+        target_col: Name of the column to create targets from
+        n_steps_out: Number of steps ahead to predict
+    
+    Returns:
+        df_new: DataFrame with target columns added
+        target_cols: List of created target column names
     """
     df_new = df.copy()
     target_cols = []
     
-    # We want to predict t+1 through t+5 (steps 1 to 5 into the future)
+    # Create targets for steps 1 to n_steps_out into the future
     for i in range(1, n_steps_out + 1):
-        col_name = f'target_temp_t+{i}'
+        col_name = f'target_{target_col}_t+{i}'
         df_new[col_name] = df_new[target_col].shift(-i)
         target_cols.append(col_name)
         
@@ -302,7 +325,7 @@ class OutlierClipper(BaseEstimator, TransformerMixin):
     Clips outliers using the IQR method.
     Fit on training data to calculate bounds, then apply to all sets.
     """
-    def __init__(self, multiplier=1.5):
+    def __init__(self, multiplier=OUTLIER_IQR_MULTIPLIER):
         self.multiplier = multiplier
         self.lower_ = None
         self.upper_ = None
@@ -328,15 +351,25 @@ def apply_feature_engineering(df):
     """Apply all feature engineering steps in sequence."""
     df = remove_leakage_columns(df)
     df = create_day_length_feature(df)
+    df = create_cyclical_wind_direction(df)
     df = create_temporal_features(df)
     df = create_lag_features(df)
     df = create_rolling_features(df)
     df = create_interaction_features(df)
     return df
 
-def select_features(X, y, top_n=25):
+def select_features(X, y, top_n=FEATURE_SELECTION_TOP_N, lasso_cv=LASSO_CV_FOLDS, 
+                   rf_n_est=RANDOM_FOREST_N_ESTIMATORS, random_state=RANDOM_STATE):
     """
     Selects the best features using a combination of methods.
+    
+    Args:
+        X: Feature DataFrame
+        y: Target Series
+        top_n: Number of features to select
+        lasso_cv: Cross-validation folds for LassoCV
+        rf_n_est: Number of estimators for RandomForestRegressor
+        random_state: Random seed for reproducibility
     """
     # Pearson correlation
     corrs = X.corrwith(y).abs().sort_values(ascending=False)
@@ -346,12 +379,12 @@ def select_features(X, y, top_n=25):
     mi_series = pd.Series(mi, index=X.columns).sort_values(ascending=False)
     
     # LassoCV
-    lasso = LassoCV(cv=5, random_state=42, n_jobs=-1)
+    lasso = LassoCV(cv=lasso_cv, random_state=random_state, n_jobs=-1)
     lasso.fit(X.fillna(0), y)
     coef_abs = pd.Series(np.abs(lasso.coef_), index=X.columns).sort_values(ascending=False)
     
     # RandomForest importance
-    rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+    rf = RandomForestRegressor(n_estimators=rf_n_est, random_state=random_state, n_jobs=-1)
     rf.fit(X.fillna(0), y)
     rf_imp = pd.Series(rf.feature_importances_, index=X.columns).sort_values(ascending=False)
     
@@ -382,37 +415,34 @@ def save_data(data, folder_path):
 if __name__ == '__main__':
     """
     Main function to run the entire preprocessing pipeline.
-    **REWRITTEN**: Follows correct order of operations.
-    1. Load
+    1. Load data
     2. Feature Engineer (full dataset)
-    3. Create Target (full dataset)
-    4. Split
+    3. Split data 
+    4. Create Target 
     5. Drop NaNs
     6. Select Features
-    7. Fit Pipeline
+    7. Fit Preprocessing Pipeline
     8. Transform & Save
     """
     
     # 1. Load data
     print("Loading data...")
     daily_data = load_data('dataset/hn_daily.csv')
+    print(f"✓ Data loaded: {daily_data.shape[0]} rows, {daily_data.shape[1]} columns")
     
     # 2. Apply feature engineering (on full dataset)
     print("Applying feature engineering to full dataset...")
     featured_data = apply_feature_engineering(daily_data)
-    
-    # 3. Create 5-day ahead multi-step target (on full dataset)
-    print("Creating multi-step targets...")
-    featured_data, target_cols = create_multiday_target(featured_data, target_col='temp', n_steps_out=5)
-    print(f"Target columns created: {target_cols}")
 
-    # 4. Split data (NOW we split)
+    # 3. Split data FIRST (before creating targets to avoid leakage!)
     print("Splitting data into train, dev, and test sets...")
     train_fe, dev_fe, test_fe = split_data(featured_data)
 
-    train_fe, target_cols = create_multiday_target(train_fe, target_col='temp', n_steps_out=5)
-    dev_fe, _ = create_multiday_target(dev_fe, target_col='temp', n_steps_out=5)
-    test_fe, _ = create_multiday_target(test_fe, target_col='temp', n_steps_out=5)
+    # 4. Create targets AFTER split (prevents data leakage)
+    print(f"Creating {N_STEPS_AHEAD}-day ahead targets...")
+    train_fe, target_cols = create_multiday_target(train_fe, target_col=TARGET_COLUMN, n_steps_out=N_STEPS_AHEAD)
+    dev_fe, _ = create_multiday_target(dev_fe, target_col=TARGET_COLUMN, n_steps_out=N_STEPS_AHEAD)
+    test_fe, _ = create_multiday_target(test_fe, target_col=TARGET_COLUMN, n_steps_out=N_STEPS_AHEAD)
     print(f"Created multi-step target columns: {target_cols}")
 
     # 5. Drop rows with NaN in critical columns (separately for each set)
@@ -432,11 +462,14 @@ if __name__ == '__main__':
     dev_fe_clean = dev_fe.dropna(subset=critical_cols)
     test_fe_clean = test_fe.dropna(subset=critical_cols)
 
-    print(f"Train shape after NaN drop: {train_fe_clean.shape}")
+    print(f"✓ Data cleaning complete:")
+    print(f"  Train: {train_fe_clean.shape[0]} rows, {train_fe_clean.shape[1]} columns")
+    print(f"  Dev:   {dev_fe_clean.shape[0]} rows, {dev_fe_clean.shape[1]} columns")
+    print(f"  Test:  {test_fe_clean.shape[0]} rows, {test_fe_clean.shape[1]} columns")
 
     # 6. Separate X and y for feature selection
-    fs_target_col = 'target_temp_t+5'
-    all_target_drop_cols = target_cols + ['temp'] 
+    fs_target_col = f'target_{TARGET_COLUMN}_t+{N_STEPS_AHEAD}'
+    all_target_drop_cols = target_cols + [TARGET_COLUMN] 
     
     X_train_fs = train_fe_clean.drop(columns=all_target_drop_cols, errors='ignore')
     y_train_fs = train_fe_clean[fs_target_col]
@@ -446,12 +479,17 @@ if __name__ == '__main__':
     numeric_fs_cols = X_train_fs.select_dtypes(include=[np.number]).columns.tolist()
     
     # **Run selection ONLY on numeric features**
-    print("Running feature selection on numeric features...")
-    selected_numeric_features = select_features(X_train_fs[numeric_fs_cols], y_train_fs, top_n=30)
-    print(f"Selected {len(selected_numeric_features)} numeric features.")
+    print(f"Running feature selection on numeric features (selecting top {FEATURE_SELECTION_TOP_N})...")
+    selected_numeric_features = select_features(X_train_fs[numeric_fs_cols], y_train_fs)
+    print(f"✓ Selected {len(selected_numeric_features)} numeric features.")
+    
+    # Validate that we got features
+    if len(selected_numeric_features) == 0:
+        print("⚠️ WARNING: No numeric features selected! Check your data.")
+        selected_numeric_features = numeric_fs_cols[:FEATURE_SELECTION_TOP_N]  # Fallback
     
     # **Define categorical features to keep**
-    categorical_features = ['icon'] # Add any other categorical cols here
+    categorical_features = CATEGORICAL_FEATURES  # Defaults to ['icon']
 
     # 8. Filter datasets with selected features
     final_features_to_keep = selected_numeric_features + categorical_features
@@ -494,10 +532,11 @@ if __name__ == '__main__':
     # Fit the preprocessor pipeline ONLY on X_train
     preprocessor.fit(X_train)
     
-    print("Transforming X_train, X_dev, and X_test...")
+    print("✓ Transforming X_train, X_dev, and X_test...")
     X_train_trans = preprocessor.transform(X_train)
     X_dev_trans = preprocessor.transform(X_dev)
     X_test_trans = preprocessor.transform(X_test)
+    print(f"✓ Transformation complete: {X_train_trans.shape[1]} features")
 
     # 11. Get feature names back from the pipeline
     # This is crucial as OneHotEncoder creates new columns
@@ -531,4 +570,4 @@ if __name__ == '__main__':
         'test_features': test_fe_clean
     }, 'processed_data')
 
-    print("Preprocessing complete.")
+    print("✓ Preprocessing complete!")

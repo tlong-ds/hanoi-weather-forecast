@@ -16,3 +16,7 @@ google-api-python-client
 fastapi
 uvicorn
 python-dotenv
+torch
+xgboost
+lightgbm
+catboost
