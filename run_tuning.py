@@ -53,7 +53,7 @@ def objective(trial):
         params = {
             "n_estimators": trial.suggest_int("n_estimators", 200, 600, step=100),
             "max_depth": trial.suggest_int("max_depth", 4, 10),
-            "learning_  rate": trial.suggest_float("learning_rate", 0.01, 0.2),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2),
             "subsample": trial.suggest_float("subsample", 0.6, 1.0),
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
             "tree_method": "hist",
