@@ -57,7 +57,7 @@ def objective(trial):
             "subsample": trial.suggest_float("subsample", 0.6, 1.0),
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
             "tree_method": "gpu_hist" if str(DEVICE) != "cpu" else "hist",
-            "device": "gpu" if str(DEVICE) != "cpu" else "cpu",
+            "device": "cuda" if str(DEVICE) == "cuda" else "cpu",
             "random_state": 42,
         }
         model = MultiOutputRegressor(XGBRegressor(**params))
