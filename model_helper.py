@@ -1,8 +1,3 @@
-"""
-Helper module for model training and evaluation.
-Centralizes configuration, data loading, and utility functions.
-"""
-
 import os
 import pandas as pd
 import numpy as np
@@ -39,7 +34,7 @@ y_TEST_FILE = os.path.join(DATA_DIR, 'y_test.csv')
 # TARGET CONFIGURATION (Synced with preprocessing.py)
 # ============================================================================
 
-N_STEPS_AHEAD = 10  # Must match preprocessing.py N_STEPS_AHEAD
+N_STEPS_AHEAD = 5  # Must match preprocessing.py N_STEPS_AHEAD
 TARGET_COLUMN = 'temp'  # Must match preprocessing.py TARGET_COLUMN
 
 # Dynamically generate target columns based on N_STEPS_AHEAD

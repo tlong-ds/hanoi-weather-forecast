@@ -358,10 +358,11 @@ def apply_feature_engineering(df):
     df = create_interaction_features(df)
     return df
 
-def select_features(X, y, top_n=FEATURE_SELECTION_TOP_N, lasso_cv=LASSO_CV_FOLDS, 
-                   rf_n_est=RANDOM_FOREST_N_ESTIMATORS, random_state=RANDOM_STATE):
+def select_features_for_target(X, y, top_n, lasso_cv=LASSO_CV_FOLDS, 
+                              rf_n_est=RANDOM_FOREST_N_ESTIMATORS, random_state=RANDOM_STATE,
+                              target_name=""):
     """
-    Selects the best features using a combination of methods.
+    Selects the best features for a single target using a combination of methods.
     
     Args:
         X: Feature DataFrame
@@ -370,12 +371,19 @@ def select_features(X, y, top_n=FEATURE_SELECTION_TOP_N, lasso_cv=LASSO_CV_FOLDS
         lasso_cv: Cross-validation folds for LassoCV
         rf_n_est: Number of estimators for RandomForestRegressor
         random_state: Random seed for reproducibility
+        target_name: Name of the target (for logging)
+    
+    Returns:
+        selected_features: List of selected feature names
+        scores_df: DataFrame with feature importance scores and ranks
     """
+    print(f"  Selecting features for {target_name}...")
+    
     # Pearson correlation
     corrs = X.corrwith(y).abs().sort_values(ascending=False)
     
     # Mutual Information
-    mi = mutual_info_regression(X.fillna(0), y)
+    mi = mutual_info_regression(X.fillna(0), y, random_state=random_state)
     mi_series = pd.Series(mi, index=X.columns).sort_values(ascending=False)
     
     # LassoCV
@@ -397,10 +405,126 @@ def select_features(X, y, top_n=FEATURE_SELECTION_TOP_N, lasso_cv=LASSO_CV_FOLDS
     }).fillna(1e6)
     
     rank_df['mean_rank'] = rank_df.mean(axis=1)
-    ranked = rank_df.sort_values('mean_rank')
     
-    selected_features = ranked.head(top_n).index.tolist()
-    return selected_features
+    # Store scores for analysis
+    scores_df = pd.DataFrame({
+        'correlation': corrs,
+        'mutual_info': mi_series,
+        'lasso_coef': coef_abs,
+        'rf_importance': rf_imp,
+        'mean_rank': rank_df['mean_rank']
+    }).sort_values('mean_rank')
+    
+    selected_features = scores_df.head(top_n).index.tolist()
+    print(f"    ✓ Selected {len(selected_features)} features for {target_name}")
+    
+    return selected_features, scores_df
+
+
+def select_features_combined(X, y_df, target_cols, top_n=FEATURE_SELECTION_TOP_N, 
+                             lasso_cv=LASSO_CV_FOLDS, rf_n_est=RANDOM_FOREST_N_ESTIMATORS, 
+                             random_state=RANDOM_STATE):
+    """
+    Combined feature selection for both short-term (t+1) and long-term (t+N) forecasting.
+    
+    This robust method runs feature selection twice:
+    1. Finds the best features for t+1 (capturing volatility/immediate changes)
+    2. Finds the best features for t+N (capturing long-term trends)
+    3. Combines them into one unified list
+    
+    This guarantees your model receives the best features for both tasks.
+    
+    Args:
+        X: Feature DataFrame
+        y_df: Target DataFrame with all target columns
+        target_cols: List of target column names (e.g., ['target_temp_t+1', ..., 'target_temp_t+5'])
+        top_n: Number of features to select per target
+        lasso_cv: Cross-validation folds for LassoCV
+        rf_n_est: Number of estimators for RandomForestRegressor
+        random_state: Random seed for reproducibility
+    
+    Returns:
+        combined_features: List of selected feature names (union of short-term and long-term)
+        feature_info: Dict with detailed selection information
+    """
+    print(f"\n{'='*70}")
+    print("COMBINED FEATURE SELECTION: Short-Term + Long-Term")
+    print(f"{'='*70}")
+    
+    # Short-term target: t+1 (volatility, immediate changes)
+    short_term_target = target_cols[0]  # First target (t+1)
+    y_short = y_df[short_term_target]
+    
+    print(f"\n[1] SHORT-TERM FEATURES (for {short_term_target})")
+    print(f"    Purpose: Capture immediate volatility and rapid changes")
+    short_features, short_scores = select_features_for_target(
+        X, y_short, top_n, lasso_cv, rf_n_est, random_state, target_name=short_term_target
+    )
+    
+    # Long-term target: t+N (trend, seasonal patterns)
+    long_term_target = target_cols[-1]  # Last target (t+N)
+    y_long = y_df[long_term_target]
+    
+    print(f"\n[2] LONG-TERM FEATURES (for {long_term_target})")
+    print(f"    Purpose: Capture long-term trends and seasonal patterns")
+    long_features, long_scores = select_features_for_target(
+        X, y_long, top_n, lasso_cv, rf_n_est, random_state, target_name=long_term_target
+    )
+    
+    # Combine features (union to avoid duplicates)
+    combined_features = list(set(short_features + long_features))
+    
+    # Analyze feature overlap
+    short_only = set(short_features) - set(long_features)
+    long_only = set(long_features) - set(short_features)
+    shared = set(short_features) & set(long_features)
+    
+    print(f"\n{'='*70}")
+    print("FEATURE SELECTION SUMMARY")
+    print(f"{'='*70}")
+    print(f"  Short-term features selected: {len(short_features)}")
+    print(f"  Long-term features selected:  {len(long_features)}")
+    print(f"  Shared features:              {len(shared)}")
+    print(f"  Short-term only:              {len(short_only)}")
+    print(f"  Long-term only:               {len(long_only)}")
+    print(f"  TOTAL COMBINED features:      {len(combined_features)}")
+    print(f"{'='*70}")
+    
+    # Additional insights
+    if shared:
+        print(f"\n✓ {len(shared)} features are important for BOTH short and long-term forecasting:")
+        for feat in sorted(list(shared))[:10]:  # Show top 10
+            print(f"    • {feat}")
+        if len(shared) > 10:
+            print(f"    ... and {len(shared) - 10} more")
+    
+    if short_only:
+        print(f"\n✓ {len(short_only)} features are UNIQUE to short-term forecasting (volatility):")
+        for feat in sorted(list(short_only))[:5]:  # Show top 5
+            print(f"    • {feat}")
+        if len(short_only) > 5:
+            print(f"    ... and {len(short_only) - 5} more")
+    
+    if long_only:
+        print(f"\n✓ {len(long_only)} features are UNIQUE to long-term forecasting (trends):")
+        for feat in sorted(list(long_only))[:5]:  # Show top 5
+            print(f"    • {feat}")
+        if len(long_only) > 5:
+            print(f"    ... and {len(long_only) - 5} more")
+    
+    # Store detailed information
+    feature_info = {
+        'short_term_features': short_features,
+        'long_term_features': long_features,
+        'combined_features': combined_features,
+        'short_only': list(short_only),
+        'long_only': list(long_only),
+        'shared': list(shared),
+        'short_term_scores': short_scores,
+        'long_term_scores': long_scores
+    }
+    
+    return combined_features, feature_info
 
 def save_data(data, folder_path):
     """Saves the preprocessed data to CSV files."""
@@ -468,20 +592,29 @@ if __name__ == '__main__':
     print(f"  Test:  {test_fe_clean.shape[0]} rows, {test_fe_clean.shape[1]} columns")
 
     # 6. Separate X and y for feature selection
-    fs_target_col = f'target_{TARGET_COLUMN}_t+{N_STEPS_AHEAD}'
     all_target_drop_cols = target_cols + [TARGET_COLUMN] 
     
     X_train_fs = train_fe_clean.drop(columns=all_target_drop_cols, errors='ignore')
-    y_train_fs = train_fe_clean[fs_target_col]
+    y_train_fs = train_fe_clean[target_cols]  # All targets for combined selection
 
-    # 7. Select features
+    # 7. Select features using COMBINED approach
     # Separate numeric and categorical for selection
     numeric_fs_cols = X_train_fs.select_dtypes(include=[np.number]).columns.tolist()
     
-    # **Run selection ONLY on numeric features**
-    print(f"Running feature selection on numeric features (selecting top {FEATURE_SELECTION_TOP_N})...")
-    selected_numeric_features = select_features(X_train_fs[numeric_fs_cols], y_train_fs)
-    print(f"✓ Selected {len(selected_numeric_features)} numeric features.")
+    # **Run COMBINED selection on numeric features**
+    # This selects the best features for BOTH short-term (t+1) and long-term (t+N)
+    print(f"\nRunning COMBINED feature selection on numeric features...")
+    print(f"  Target columns: {target_cols}")
+    print(f"  Selecting top {FEATURE_SELECTION_TOP_N} features per target...")
+    
+    selected_numeric_features, feature_info = select_features_combined(
+        X_train_fs[numeric_fs_cols], 
+        y_train_fs, 
+        target_cols,
+        top_n=FEATURE_SELECTION_TOP_N
+    )
+    
+    print(f"\n✓ Combined selection complete: {len(selected_numeric_features)} numeric features selected.")
     
     # Validate that we got features
     if len(selected_numeric_features) == 0:
@@ -490,6 +623,42 @@ if __name__ == '__main__':
     
     # **Define categorical features to keep**
     categorical_features = CATEGORICAL_FEATURES  # Defaults to ['icon']
+    
+    # 7.1 OPTIONAL: Save feature selection details for analysis
+    print("\nSaving feature selection details...")
+    feature_selection_dir = 'processed_data/feature_selection'
+    if not os.path.exists(feature_selection_dir):
+        os.makedirs(feature_selection_dir)
+    
+    # Save feature lists
+    pd.DataFrame({
+        'feature': selected_numeric_features,
+        'type': 'combined'
+    }).to_csv(os.path.join(feature_selection_dir, 'selected_features.csv'), index=False)
+    
+    pd.DataFrame({
+        'feature': feature_info['short_term_features'],
+        'type': 'short_term'
+    }).to_csv(os.path.join(feature_selection_dir, 'short_term_features.csv'), index=False)
+    
+    pd.DataFrame({
+        'feature': feature_info['long_term_features'],
+        'type': 'long_term'
+    }).to_csv(os.path.join(feature_selection_dir, 'long_term_features.csv'), index=False)
+    
+    # Save feature importance scores
+    feature_info['short_term_scores'].to_csv(
+        os.path.join(feature_selection_dir, 'short_term_scores.csv')
+    )
+    feature_info['long_term_scores'].to_csv(
+        os.path.join(feature_selection_dir, 'long_term_scores.csv')
+    )
+    
+    print(f"  ✓ Feature selection details saved to '{feature_selection_dir}/'")
+    print(f"    - selected_features.csv: All {len(selected_numeric_features)} selected features")
+    print(f"    - short_term_features.csv: {len(feature_info['short_term_features'])} short-term features")
+    print(f"    - long_term_features.csv: {len(feature_info['long_term_features'])} long-term features")
+    print(f"    - *_scores.csv: Detailed importance scores for analysis")
 
     # 8. Filter datasets with selected features
     final_features_to_keep = selected_numeric_features + categorical_features
