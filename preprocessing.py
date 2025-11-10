@@ -35,7 +35,7 @@ DEV_RATIO = 0.15
 TEST_RATIO = 0.15
 
 # Target Creation Configuration
-N_STEPS_AHEAD = 10 # Predict 10 days ahead
+N_STEPS_AHEAD = 5 # Predict 5 days ahead
 TARGET_COLUMN = 'temp'
 
 # Feature Selection Configuration
