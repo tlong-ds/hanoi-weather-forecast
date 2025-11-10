@@ -1,0 +1,1 @@
+{"model_name": "CatBoost", "iterations": 500, "depth": 4, "learning_rate": 0.014185371615744864, "l2_leaf_reg": 4.260673208870433, "subsample": 0.9781299341552055}

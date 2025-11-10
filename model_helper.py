@@ -48,48 +48,18 @@ TARGET_COLUMNS = [f'target_{TARGET_COLUMN}_t+{i}' for i in range(1, N_STEPS_AHEA
 RANDOM_STATE = 42
 
 # Model configurations
+with open('best_params.json', 'r') as f:
+    import json
+    best_params = json.load(f)
+    model_name = best_params.pop('model_name')
+    other_params = {k: v for k, v in best_params.items() if k != 'model_name'}
+
 MODEL_CONFIGS = {
-    # 'Random Forest': {
-    #     'params': {
-    #         'n_estimators': 200,
-    #         'max_depth': 12,
-    #         'min_samples_split': 4,
-    #         'random_state': RANDOM_STATE,
-    #         'n_jobs': -1,
-    #         'verbose': 0
-    #     },
-    #     'enabled': True,
-    #     'description': 'Ensemble tree-based model'
-    # },
-    # 'XGBoost': {
-    #     'params': {
-    #         'n_estimators': 300,
-    #         'max_depth': 6,
-    #         'learning_rate': 0.05,
-    #         'subsample': 0.8,
-    #         'colsample_bytree': 0.8,
-    #         'random_state': RANDOM_STATE,
-    #         'n_jobs': -1,
-    #         'verbosity': 0
-    #     },
-    #     'enabled': True,
-    #     'description': 'Gradient boosting model with multi-output wrapper'
-    # },
-    "CatBoost": {
-        'params': {
-            'iterations': 400, 
-            'depth': 6, 
-            'learning_rate': 0.016517575668639525, 
-            'l2_leaf_reg': 1.8809861076799286, 
-            'subsample': 0.711841663235127,
-            "random_state": RANDOM_STATE,
-            "verbose": 0,
-            "task_type": "GPU" if str(DEVICE) == "cuda" else "CPU",
-        },
-        'enabled': True,
-        'description': 'CatBoost Regressor with multi-output wrapper'
+    model_name: {
+        "params": {**other_params},
+        "enabled": True,
+        "description": f"CatBoost with multi-output wrapper"
     }
-        
 }
 
 # ============================================================================
