@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 # ========================================
 
-weather_df = pd.read_csv("D:\Project ML\hanoi-weather-forecast\dataset\hn_daily.csv", parse_dates=["datetime"])
+weather_df = pd.read_csv("dataset/hn_daily.csv", parse_dates=["datetime"])
 weather_df['datetime'] = pd.to_datetime(weather_df['datetime'])
 weather_df = weather_df.set_index('datetime')
 
