@@ -199,7 +199,6 @@ if __name__ == "__main__":
             iteration=day_step
         )
         
-        # <<< SỬA LẠI DÒNG NÀY >>>
         # Log 2: Log tên Model (DÙNG report_text và "INFO")
         logger.report_text(
             f"Best Model for {day_str}: {best_model_name}",
