@@ -107,8 +107,8 @@ def objective(trial):
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
             "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 5.0),
             "reg_lambda": trial.suggest_float("reg_lambda", 0.0, 5.0),
-            # "device": "gpu",  <--- BỎ DÒNG NÀY
-            "device_type": "cuda", # <--- GIỮ LẠI DÒNG NÀY
+            "device_type": "cpu",  # Thay "cuda" thành "cpu"
+            "n_jobs": -1,          # Thêm lại n_jobs vì giờ chạy bằng CPU
             "random_state": 42,
         }
         model = LGBMRegressor(**params)
