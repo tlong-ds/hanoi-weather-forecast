@@ -6,9 +6,9 @@ dew
 sealevelpressure
 sealevelpressure_roll_mean_14
 daylength_uv
+temp_lag3
 day_cos
 sealevelpressure_lag7
-temp_lag3
 temp_lag1
 week_cos
 solarradiation
@@ -18,11 +18,11 @@ sealevelpressure_roll_mean_84
 sealevelpressure_lag1
 dew_lag1
 temp_lag7
-precip_roll_std_56
 precip_roll_mean_56
+precip_roll_std_56
 windspeed_roll_mean_84
-solarenergy
 cloudcover_roll_std_84
+solarenergy
 humidity_roll_std_56
 sealevelpressure_lag3
 humidity_roll_std_84
