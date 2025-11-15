@@ -7,18 +7,18 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 
 # ========================================
-# DAILY DATA
-weather_df = pd.read_csv("D:\Project ML\hanoi-weather-forecast\dataset\hn_daily.csv", parse_dates=["datetime"])
+
+weather_df = pd.read_csv("dataset/hn_daily.csv", parse_dates=["datetime"])
 weather_df['datetime'] = pd.to_datetime(weather_df['datetime'])
 weather_df = weather_df.set_index('datetime')
 
-# HOURLY DATA
-hourly_df = pd.read_csv("D:\Project ML\hanoi-weather-forecast\dataset\hn_hourly.csv", parse_dates=["datetime"])
+
+# ========================================
+
+hourly_df = pd.read_csv("dataset/hn_hourly.csv", parse_dates=["datetime"])
 hourly_df['datetime'] = pd.to_datetime(hourly_df['datetime'])
 hourly_df = hourly_df.set_index('datetime')
 
-
-# ========================================
 # CONFIGURATION
 # ========================================
 DEFAULT_LOCATION = "Hanoi, Vietnam"
@@ -280,9 +280,9 @@ if weather_df is None or len(weather_df) == 0:
     st.warning("⚠️ No weather data available")
     st.info("""
     ### Để sử dụng dashboard:
-    1. Truyền DataFrame vào biến weather_df
+    1. Truyền DataFrame vào biến `weather_df`
     2. DataFrame cần có datetime index
-    3. Các cột cần thiết: temp, tempmax, tempmin, humidity, precip, windspeed, etc.
+    3. Các cột cần thiết: `temp`, `tempmax`, `tempmin`, `humidity`, `precip`, `windspeed`, etc.
     """)
     st.stop()
 
@@ -314,9 +314,6 @@ left_col, right_col = st.columns([2.5, 1])
 # ========================================
 with left_col:
     selected_ts = pd.to_datetime(selected_date)
-    # Lấy data hourly trong ngày được chọn
-    hourly_today = hourly_df.loc[hourly_df.index.date == selected_ts.date()]
-
     # Trường hợp index có time, nên select ngày gần nhất
     if selected_ts in weather_df.index:
         current = weather_df.loc[selected_ts]
@@ -339,7 +336,9 @@ with left_col:
         </div>
     """, unsafe_allow_html=True)
 
-    # Lọc dữ liệu theo ngày
+
+    #======================
+    # HOURLY TEMP
     hourly_today = hourly_df[hourly_df.index.date == selected_date]
 
     # Icon map
@@ -357,7 +356,17 @@ with left_col:
         return icon_map.get(str(code), "❓")
 
     # --- Build scroll ngang ---
-    html = '<div style="display:flex; overflow-x:auto; gap:10px; padding:10px; white-space:nowrap;">'
+    html = '''
+    <div style="
+        display:flex; 
+        overflow-x:auto; 
+        overflow-y:hidden;
+        gap:10px; 
+        padding:10px; 
+        white-space:nowrap;
+        height:120px;">
+    '''
+
     current_hour = pd.Timestamp.now().hour
     temp_fallback = hourly_today['temp'].mean() if not hourly_today.empty else 20
 
@@ -374,16 +383,26 @@ with left_col:
         border = "2px solid #3b82f6" if hour == current_hour else "none"
         
         html += f"""
-        <div style="flex:0 0 auto; width:70px; background:#1e293b; color:#e2e8f0; border-radius:12px; padding:10px; text-align:center; border:{border};">
+        <div style="
+            flex:0 0 auto;
+            width:70px; 
+            background:#1e293b; 
+            color:#e2e8f0; 
+            border-radius:12px; 
+            padding:10px; 
+            text-align:center; 
+            border:{border};
+            height:100px;">
             <div style="font-size:18px; font-weight:bold; color:#3b82f6;">{temp}</div>
             <div style="font-size:26px; margin:4px 0;">{icon}</div>
             <div style="font-size:12px; color:#cbd5e1;">{label}</div>
         </div>
         """
-    html += '</div>'
 
-    # --- Hiển thị scroll ngang, chiều cao vừa đủ ---
-    st.components.v1.html(html, scrolling=True)
+    html += "</div>"
+
+    st.components.v1.html(html, height=140, scrolling=False)
+
 
     # 🧭 Weekly Forecast Chart
     st.markdown('<h3 style="margin-top: 30px;">📈 Weekly Temperature Trend</h3>', unsafe_allow_html=True)
@@ -560,59 +579,9 @@ with right_col:
             <div style="font-size:28px; margin-bottom: 8px;">🌡️</div>
             <div style="color:#94a3b8; font-size:13px; margin-bottom:8px;">Pressure</div>
             <div style="font-size:24px; font-weight:700; color:#ffffff;">
-                {current.get('sealevelpressure', 0):.0f} mb
+                {current.get('pressure', 0):.0f} mb
             </div>
         </div>
     """, unsafe_allow_html=True)
 
-import streamlit as st
-import pandas as pd
-
-
-# --- Load dữ liệu ---
-
-# Lọc dữ liệu theo ngày
-hourly_today = hourly_df[hourly_df.index.date == selected_date]
-
-# Icon map
-icon_map = {
-    'clear-day': '☀️',
-    'clear-night': '🌙',
-    'partly-cloudy-day': '🌤️',
-    'partly-cloudy-night': '⛅',
-    'cloudy': '☁️',
-    'rain': '🌧️',
-    'fog': '🌫️',
-    'wind': '💨'
-}
-def icon_from_code(code):
-    return icon_map.get(str(code), "❓")
-
-# --- Build scroll ngang ---
-html = '<div style="display:flex; overflow-x:auto; gap:10px; padding:10px; white-space:nowrap;">'
-current_hour = pd.Timestamp.now().hour
-temp_fallback = hourly_today['temp'].mean() if not hourly_today.empty else 20
-
-for hour in range(24):
-    row = hourly_today[hourly_today.index.hour == hour] if not hourly_today.empty else None
-    if row is not None and not row.empty:
-        temp = f"{row.iloc[0]['temp']:.0f}°"
-        icon = icon_from_code(row.iloc[0]['icon'])
-    else:
-        temp = f"{temp_fallback:.0f}°"
-        icon = "❓"
-    
-    label = "Now" if hour == current_hour else f"{hour}:00"
-    border = "2px solid #3b82f6" if hour == current_hour else "none"
-    
-    html += f"""
-    <div style="flex:0 0 auto; width:70px; background:#1e293b; color:#e2e8f0; border-radius:12px; padding:10px; text-align:center; border:{border};">
-        <div style="font-size:18px; font-weight:bold; color:#3b82f6;">{temp}</div>
-        <div style="font-size:26px; margin:4px 0;">{icon}</div>
-        <div style="font-size:12px; color:#cbd5e1;">{label}</div>
-    </div>
-    """
-html += '</div>'
-
-# --- Hiển thị scroll ngang, chiều cao vừa đủ ---
-st.components.v1.html(html, height=140, scrolling=True)
+# ========================================
