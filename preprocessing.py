@@ -416,22 +416,7 @@ def select_features_for_target(X, y, top_n, lasso_cv=LASSO_CV_FOLDS,
         'mean_rank': rank_df['mean_rank']
     }).sort_values('mean_rank')
     
-<<<<<<< Updated upstream
-    selected_features = ranked.head(top_n).index.tolist()
-    return selected_features
-=======
-    # Store scores for analysis
-    scores_df = pd.DataFrame({
-        'correlation': corrs,
-        'mutual_info': mi_series,
-        'lasso_coef': coef_abs,
-        'rf_importance': rf_imp,
-        'mean_rank': rank_df['mean_rank']
-    }).sort_values('mean_rank')
-    
     selected_features = scores_df.head(top_n).index.tolist()
-    print(f"    ✓ Selected {len(selected_features)} features for {target_name}")
-    
     return selected_features, scores_df
 
 
@@ -472,7 +457,7 @@ def select_features_combined(X, y_df, target_cols, top_n=FEATURE_SELECTION_TOP_N
     print(f"\n[1] SHORT-TERM FEATURES (for {short_term_target})")
     print(f"    Purpose: Capture immediate volatility and rapid changes")
     short_features, short_scores = select_features_for_target(
-        X, y_short, top_n, lasso_cv, rf_n_est, random_state, target_name=short_term_target
+        X, y_short, top_n, lasso_cv, rf_n_est, random_state
     )
     
     # Long-term target: t+N (trend, seasonal patterns)
@@ -482,7 +467,7 @@ def select_features_combined(X, y_df, target_cols, top_n=FEATURE_SELECTION_TOP_N
     print(f"\n[2] LONG-TERM FEATURES (for {long_term_target})")
     print(f"    Purpose: Capture long-term trends and seasonal patterns")
     long_features, long_scores = select_features_for_target(
-        X, y_long, top_n, lasso_cv, rf_n_est, random_state, target_name=long_term_target
+        X, y_long, top_n, lasso_cv, rf_n_est, random_state
     )
     
     # Combine features (union to avoid duplicates)
@@ -539,7 +524,7 @@ def select_features_combined(X, y_df, target_cols, top_n=FEATURE_SELECTION_TOP_N
     }
     
     return combined_features, feature_info
->>>>>>> Stashed changes
+
 
 def save_data(data, folder_path):
     """Saves the preprocessed data to CSV files."""
@@ -609,104 +594,16 @@ if __name__ == '__main__':
     # 6. Separate X and y for feature selection
     all_target_drop_cols = target_cols + [TARGET_COLUMN] 
     
-    X_train_fs = train_fe_clean.drop(columns=all_target_drop_cols, errors='ignore')
-    y_train_fs = train_fe_clean[fs_target_col]
+    X_train_full = train_fe_clean.drop(columns=all_target_drop_cols, errors='ignore')
+    y_train_full = train_fe_clean[target_cols]  # All targets
 
-    # 7. Select features
-    # Separate numeric and categorical for selection
-    numeric_fs_cols = X_train_fs.select_dtypes(include=[np.number]).columns.tolist()
+    X_dev_full = dev_fe_clean.drop(columns=all_target_drop_cols, errors='ignore')
+    y_dev_full = dev_fe_clean[target_cols]
     
-    # **Run selection ONLY on numeric features**
-    print("Running feature selection on numeric features...")
-    selected_numeric_features = select_features(X_train_fs[numeric_fs_cols], y_train_fs, top_n=30)
-    print(f"Selected {len(selected_numeric_features)} numeric features.")
-    
-    # **Define categorical features to keep**
-    categorical_features = ['icon'] # Add any other categorical cols here
+    X_test_full = test_fe_clean.drop(columns=all_target_drop_cols, errors='ignore')
+    y_test_full = test_fe_clean[target_cols]
 
-<<<<<<< Updated upstream
-    # 8. Filter datasets with selected features
-    final_features_to_keep = selected_numeric_features + categorical_features
-    
-    X_train = train_fe_clean[final_features_to_keep]
-    y_train = train_fe_clean[target_cols]
-
-    X_dev = dev_fe_clean[final_features_to_keep]
-    y_dev = dev_fe_clean[target_cols]
-
-    X_test = test_fe_clean[final_features_to_keep]
-    y_test = test_fe_clean[target_cols]
-
-    # 9. Define preprocessing pipelines (NOW with OneHotEncoder)
-    
-    # Pipeline for numeric features
-    numeric_pipeline = Pipeline([
-        ('imputer', SimpleImputer(strategy='median')),
-        ('outlier_clipper', OutlierClipper()),
-        ('scaler', StandardScaler())
-    ])
-    
-    # Pipeline for categorical features
-    categorical_pipeline = Pipeline([
-        ('imputer', SimpleImputer(strategy='constant', fill_value='none')),
-        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
-    ])
-    
-    # Combine pipelines in ColumnTransformer
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ('num', numeric_pipeline, selected_numeric_features),
-            ('cat', categorical_pipeline, categorical_features)
-        ],
-        remainder='drop'
-    )
-
-    # 10. Fit and transform data
-    print("Fitting pipeline on X_train...")
-    # Fit the preprocessor pipeline ONLY on X_train
-    preprocessor.fit(X_train)
-    
-    print("Transforming X_train, X_dev, and X_test...")
-    X_train_trans = preprocessor.transform(X_train)
-    X_dev_trans = preprocessor.transform(X_dev)
-    X_test_trans = preprocessor.transform(X_test)
-
-    # 11. Get feature names back from the pipeline
-    # This is crucial as OneHotEncoder creates new columns
-    feature_names = (
-        selected_numeric_features + 
-        preprocessor.named_transformers_['cat']
-                    .named_steps['onehot']
-                    .get_feature_names_out(categorical_features).tolist()
-    )
-
-    # 12. Convert to DataFrames, preserving the original index
-    X_train_df = pd.DataFrame(X_train_trans, columns=feature_names, index=X_train.index)
-    X_dev_df = pd.DataFrame(X_dev_trans, columns=feature_names, index=X_dev.index)
-    X_test_df = pd.DataFrame(X_test_trans, columns=feature_names, index=X_test.index)
-
-        # 7.10. Lưu dữ liệu đã transform
-        data_dir = f'processed_data/target_t_{target_day_str}'
-        save_data({
-            f'X_train_t{target_day_str}': X_train_df,
-            f'X_dev_t{target_day_str}': X_dev_df,
-            f'X_test_t{target_day_str}': X_test_df,
-            f'y_train_t{target_day_str}': y_train_target.to_frame(), # Chỉ lưu y của target này
-            f'y_dev_t{target_day_str}': y_dev_full[[target_col_name]],
-            f'y_test_t{target_day_str}': y_test_full[[target_col_name]]
-        }, data_dir)
-        print(f"    ✓ Transformed data saved to '{data_dir}/'")
-
-    # Lưu lại data gốc đã feature engineering (chưa scale) để tham khảo
-    save_data({
-        'train_features_cleaned': train_fe_clean,
-        'dev_features_cleaned': dev_fe_clean,
-        'test_features_cleaned': test_fe_clean
-    }, 'processed_data')
-
-    print("Preprocessing complete.")
-=======
-    # Get numeric and categorical columns (ONCE, before the loop)
+    # Get numeric and categorical columns (ONCE, before processing)
     numeric_fs_cols = X_train_full.select_dtypes(include=[np.number]).columns.tolist()
     categorical_features_to_keep = [col for col in CATEGORICAL_FEATURES if col in X_train_full.columns]
 
@@ -808,7 +705,6 @@ if __name__ == '__main__':
                 preprocessor = joblib.load(pipeline_filename)
                 
                 # Validate that the pipeline uses the same features
-                # Get the feature names from the loaded pipeline
                 loaded_numeric_features = preprocessor.named_transformers_['num'].feature_names_in_.tolist()
                 
                 # Check if they match current features
@@ -910,4 +806,3 @@ if __name__ == '__main__':
     print(f"  • t+2, t+3, t+4: {len(combined_features)} combined features")
     print(f"  • t+5: {len(feature_info['long_term_features'])} long-term features")
     print(f"{'='*70}")
->>>>>>> Stashed changes
