@@ -14,11 +14,13 @@ import os
 import json
 from clearml import Task, Logger
 from model_helper import DEVICE 
+from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, mean_absolute_percentage_error
 from xgboost import XGBRegressor
 from lightgbm import LGBMRegressor
 from catboost import CatBoostRegressor
+
 
 # =============== CONFIGURATION ===============
 N_STEPS_AHEAD = 5
