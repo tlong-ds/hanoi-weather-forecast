@@ -579,9 +579,14 @@ with right_col:
             <div style="font-size:28px; margin-bottom: 8px;">🌡️</div>
             <div style="color:#94a3b8; font-size:13px; margin-bottom:8px;">Pressure</div>
             <div style="font-size:24px; font-weight:700; color:#ffffff;">
-                {current.get('pressure', 0):.0f} mb
+                {current.get('sealevelpressure', 0):.0f} mb
             </div>
         </div>
     """, unsafe_allow_html=True)
 
-# ========================================
+
+
+
+
+
+
