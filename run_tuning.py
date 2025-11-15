@@ -190,18 +190,23 @@ if __name__ == "__main__":
         print(f"  Best Params: {best_params}")
 
         # 6. Log kết quả tốt nhất cho ngày này lên ClearML
+        
+        # Log 1: Log RMSE (DÙNG report_scalar) - Dòng này ĐÚNG
         logger.report_scalar(
             title="Best RMSE per Day",
             series=f"{day_str}",
             value=best_rmse,
             iteration=day_step
         )
-        logger.report_scalar(
-            title="Best Model per Day",
-            series=f"{day_str}",
-            value=best_model_name, # Log tên model
-            iteration=day_step
+        
+        # <<< SỬA LẠI DÒNG NÀY >>>
+        # Log 2: Log tên Model (DÙNG report_text và "INFO")
+        logger.report_text(
+            f"Best Model for {day_str}: {best_model_name}",
+            level="INFO"  # <-- Sửa thành "INFO" (chuỗi)
         )
+        
+        # Log 3: Log toàn bộ Params (DÙNG report_text) - Dòng này ĐÚNG
         logger.report_text(f"Best Params {day_str}: {best_params}")
 
     print("\n🎉🎉🎉 Hoàn tất CẢ 5 quy trình tuning & log lên ClearML! 🎉🎉🎉")
