@@ -49,17 +49,32 @@ TARGET_COLUMNS = [f'target_{TARGET_COLUMN}_t+{i}' for i in range(1, N_STEPS_AHEA
 RANDOM_STATE = 42
 
 # Model configurations
-with open('best_params.json', 'r') as f:
-    import json
-    best_params = json.load(f)
-    model_name = best_params.pop('model_name')
-    other_params = {k: v for k, v in best_params.items() if k != 'model_name'}
+import json
+
+# Try to load best_params.json if it exists, otherwise use default
+try:
+    with open('best_params.json', 'r') as f:
+        best_params = json.load(f)
+        model_name = best_params.pop('model_name')
+        other_params = {k: v for k, v in best_params.items() if k != 'model_name'}
+except FileNotFoundError:
+    print("⚠️  Warning: best_params.json not found. Using default CatBoost configuration.")
+    print("   Run tuning (tune.py) to generate optimized parameters.")
+    model_name = "CatBoost"
+    other_params = {
+        "iterations": 500,
+        "depth": 6,
+        "learning_rate": 0.05,
+        "l2_leaf_reg": 3.0,
+        "random_state": RANDOM_STATE,
+        "verbose": 0
+    }
 
 MODEL_CONFIGS = {
     model_name: {
         "params": {**other_params},
         "enabled": True,
-        "description": f"CatBoost with multi-output wrapper"
+        "description": f"{model_name} with multi-output wrapper"
     }
 }
 
