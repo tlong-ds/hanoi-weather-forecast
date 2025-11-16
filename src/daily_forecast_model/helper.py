@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import torch
+import joblib
 
 
 # ============================================================================
@@ -199,3 +200,328 @@ def get_data_paths():
         'X_test': X_TEST_FILE,
         'y_test': y_TEST_FILE,
     }
+
+
+# ============================================================================
+# MODEL SAVING FUNCTIONS
+# ============================================================================
+
+def save_models(trained_models, model_format=None, convert_to_onnx=None):
+    """
+    Save trained models to disk in specified format.
+    
+    Centralized model saving function used by train.py and other modules.
+    Supports multiple formats: ONNX (with backup), joblib, pickle.
+    
+    Args:
+        trained_models (dict): Dictionary of trained model objects {model_name: model}
+        model_format (str, optional): 'onnx', 'joblib', or 'pickle'. Uses global config if None
+        convert_to_onnx (bool, optional): Whether to convert to ONNX. Uses global config if None
+    """
+    if model_format is None:
+        model_format = MODEL_FORMAT
+    if convert_to_onnx is None:
+        convert_to_onnx = CONVERT_TO_ONNX
+    
+    # Check if ONNX is available
+    onnx_available = False
+    if model_format == 'onnx' and convert_to_onnx:
+        try:
+            import skl2onnx
+            import onnx
+            onnx_available = True
+        except ImportError:
+            print("⚠️  Warning: skl2onnx not installed. ONNX export will be skipped.")
+            onnx_available = False
+    
+    print(f"\nSaving trained models to '{MODELS_DIR}/'...")
+    
+    for model_name, model in trained_models.items():
+        try:
+            model_filename = f"{model_name.replace(' ', '_').replace('(', '').replace(')', '').lower()}"
+            
+            if model_format == 'onnx' and convert_to_onnx:
+                if not onnx_available:
+                    print(f"  ⚠️  {model_name}: ONNX not available, falling back to joblib")
+                    save_model_joblib(model, model_filename)
+                else:
+                    save_model_onnx(model, model_name, model_filename)
+            elif model_format == 'joblib':
+                save_model_joblib(model, model_filename)
+            else:  # pickle
+                save_model_pickle(model, model_filename)
+            
+            print(f"  ✓ {model_name} saved successfully")
+        except Exception as e:
+            print(f"  ✗ Failed to save {model_name}: {e}")
+
+
+def save_model_onnx(model, model_name, filename):
+    """
+    Convert and save model to ONNX format with joblib backup.
+    
+    Supports: Linear Regression, Random Forest, XGBoost
+    Unsupported: CatBoost, LightGBM (falls back to joblib)
+    
+    Args:
+        model: Trained sklearn/XGBoost model (possibly wrapped in MultiOutputRegressor)
+        model_name (str): Name of the model for display
+        filename (str): Base filename without extension
+    """
+    from skl2onnx.common.data_types import FloatTensorType
+    from skl2onnx import convert_sklearn
+    import onnx
+    
+    try:
+        # Get the actual model from MultiOutputRegressor wrapper if needed
+        actual_model = model.estimator if hasattr(model, 'estimator') else model
+        
+        # Check if model type is supported by skl2onnx
+        actual_model_type = type(actual_model).__name__
+        unsupported_types = ['CatBoostRegressor', 'LGBMRegressor', 'LGBMRFRegressor']
+        
+        if actual_model_type in unsupported_types:
+            print(f"    ℹ️  {actual_model_type} not natively supported by ONNX, using joblib instead")
+            save_model_joblib(model, filename)
+            return
+        
+        # Load sample data to determine number of features
+        X_sample, _ = load_data('train')
+        n_features = X_sample.shape[1]
+        
+        # Define ONNX input type
+        initial_type = [('float_input', FloatTensorType([None, n_features]))]
+        
+        # Convert to ONNX
+        onnx_model = convert_sklearn(
+            actual_model,
+            initial_types=initial_type,
+            target_opset=12
+        )
+        
+        # Save ONNX model
+        filepath = os.path.join(MODELS_DIR, f"{filename}.onnx")
+        with open(filepath, 'wb') as f:
+            f.write(onnx_model.SerializeToString())
+        
+        # Also save the original model as backup for loading
+        backup_filepath = os.path.join(MODELS_DIR, f"{filename}_backup.joblib")
+        joblib.dump(model, backup_filepath)
+        
+        print(f"    📦 Saved as ONNX: {filepath}")
+        print(f"    💾 Backup joblib: {backup_filepath}")
+        
+    except Exception as e:
+        print(f"    ⚠️  ONNX conversion failed: {e}")
+        print(f"    Falling back to joblib...")
+        save_model_joblib(model, filename)
+
+
+def save_model_joblib(model, filename):
+    """
+    Save model using joblib format.
+    
+    Args:
+        model: Trained model object
+        filename (str): Base filename without extension
+    """
+    filepath = os.path.join(MODELS_DIR, f"{filename}.joblib")
+    joblib.dump(model, filepath)
+
+
+def save_model_pickle(model, filename):
+    """
+    Save model using pickle format.
+    
+    Args:
+        model: Trained model object
+        filename (str): Base filename without extension
+    """
+    import pickle
+    filepath = os.path.join(MODELS_DIR, f"{filename}.pkl")
+    with open(filepath, 'wb') as f:
+        pickle.dump(model, f)
+
+
+# ============================================================================
+# MODEL LOADING FUNCTIONS
+# ============================================================================
+
+def load_trained_models(verbose=True):
+    """
+    Load previously trained models from disk.
+    
+    Centralized model loading function used by evaluate.py, inference.py, and other modules.
+    Supports multiple formats with automatic fallback priority:
+    1. ONNX backup (joblib) - for ONNX-converted models
+    2. Regular joblib
+    3. Pickle
+    4. ONNX (requires ONNX Runtime, not recommended)
+    
+    Args:
+        verbose (bool): Whether to print loading status messages
+    
+    Returns:
+        dict: Dictionary of loaded models {model_name: model_object}
+              Empty dict if no models found or loading fails
+    """
+    loaded_models = {}
+    
+    if not os.path.exists(MODELS_DIR):
+        if verbose:
+            print(f"✗ Models directory not found: {MODELS_DIR}")
+        return loaded_models
+    
+    if verbose:
+        print(f"\n{'='*70}")
+        print(f"Loading trained models from '{MODELS_DIR}/'...")
+        print(f"{'='*70}\n")
+    
+    try:
+        # Try to load models for each enabled model type
+        for model_name in get_enabled_models().keys():
+            model_filename = f"{model_name.replace(' ', '_').replace('(', '').replace(')', '').lower()}"
+            
+            # Try loading in order of preference: backup joblib -> joblib -> pickle -> ONNX
+            backup_path = os.path.join(MODELS_DIR, f"{model_filename}_backup.joblib")
+            joblib_path = os.path.join(MODELS_DIR, f"{model_filename}.joblib")
+            pickle_path = os.path.join(MODELS_DIR, f"{model_filename}.pkl")
+            onnx_path = os.path.join(MODELS_DIR, f"{model_filename}.onnx")
+            
+            model = None
+            loaded_from = None
+            
+            # Priority 1: Backup joblib (for ONNX-converted models)
+            if os.path.exists(backup_path):
+                try:
+                    model = joblib.load(backup_path)
+                    loaded_from = "backup joblib (ONNX model)"
+                except Exception as e:
+                    if verbose:
+                        print(f"  ⚠️  Failed to load {model_name} from backup: {e}")
+            
+            # Priority 2: Regular joblib
+            if model is None and os.path.exists(joblib_path):
+                try:
+                    model = joblib.load(joblib_path)
+                    loaded_from = "joblib"
+                except Exception as e:
+                    if verbose:
+                        print(f"  ⚠️  Failed to load {model_name} from joblib: {e}")
+            
+            # Priority 3: Pickle
+            if model is None and os.path.exists(pickle_path):
+                try:
+                    import pickle
+                    with open(pickle_path, 'rb') as f:
+                        model = pickle.load(f)
+                    loaded_from = "pickle"
+                except Exception as e:
+                    if verbose:
+                        print(f"  ⚠️  Failed to load {model_name} from pickle: {e}")
+            
+            # Priority 4: ONNX (warning: requires ONNX runtime, returns reference only)
+            if model is None and os.path.exists(onnx_path):
+                if verbose:
+                    print(f"  ℹ️  {model_name}: ONNX file exists but requires ONNX Runtime for inference")
+                    print(f"      Use backup joblib instead (recommended)")
+                continue
+            
+            # Report result
+            if model is not None:
+                loaded_models[model_name] = model
+                if verbose:
+                    print(f"  ✓ {model_name:<20} loaded from {loaded_from}")
+            else:
+                if verbose:
+                    print(f"  ✗ {model_name:<20} not found (no saved model file)")
+    
+    except Exception as e:
+        if verbose:
+            print(f"\n✗ Error loading models: {e}")
+    
+    if verbose:
+        print(f"\n{'='*70}")
+        print(f"Loaded {len(loaded_models)} model(s) successfully")
+        print(f"{'='*70}\n")
+        
+        if not loaded_models:
+            print("⚠️  No trained models found. Please train models first using train.py")
+    
+    return loaded_models
+
+
+def load_single_model(model_path):
+    """
+    Load a single model from a specific path.
+    
+    Utility function for loading models by direct path (used in inference.py).
+    
+    Args:
+        model_path (str): Full path to model file (.joblib, .pkl, or .onnx)
+    
+    Returns:
+        model: Loaded model object
+    
+    Raises:
+        FileNotFoundError: If model file doesn't exist
+        ValueError: If unsupported model format
+        RuntimeError: If loading fails
+    """
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+    
+    try:
+        if model_path.endswith('.joblib'):
+            model = joblib.load(model_path)
+        elif model_path.endswith('.pkl'):
+            import pickle
+            with open(model_path, 'rb') as f:
+                model = pickle.load(f)
+        else:
+            raise ValueError(f"Unsupported model format: {model_path}. Use .joblib or .pkl")
+        
+        return model
+        
+    except Exception as e:
+        raise RuntimeError(f"Failed to load model from {model_path}: {e}")
+
+
+def get_best_model_path(models_dir=None):
+    """
+    Auto-detect the best available model in the models directory.
+    
+    Priority:
+    1. ONNX backup files (most recent)
+    2. Regular joblib files (most recent)
+    3. Pickle files (most recent)
+    
+    Args:
+        models_dir (str, optional): Path to models directory. Uses global MODELS_DIR if None
+    
+    Returns:
+        str: Path to best available model file, or None if no models found
+    """
+    if models_dir is None:
+        models_dir = MODELS_DIR
+    
+    if not os.path.exists(models_dir):
+        return None
+    
+    model_files = [f for f in os.listdir(models_dir) if f.endswith(('.joblib', '.pkl'))]
+    
+    if not model_files:
+        return None
+    
+    # Prioritize backup joblib files (ONNX models), then regular joblib
+    backup_files = [f for f in model_files if 'backup' in f and f.endswith('.joblib')]
+    if backup_files:
+        return os.path.join(models_dir, backup_files[0])
+    
+    joblib_files = [f for f in model_files if f.endswith('.joblib')]
+    if joblib_files:
+        return os.path.join(models_dir, joblib_files[0])
+    
+    # Fall back to pickle
+    return os.path.join(models_dir, model_files[0])
+

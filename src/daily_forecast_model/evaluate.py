@@ -3,107 +3,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from daily_forecast_model.helper import load_data
+
 # Import configuration and helper functions
 from daily_forecast_model.helper import (
     TARGET_COLUMNS, SAVE_RESULTS, RESULTS_FILENAME, RESULTS_DIR,
     PLOT_ALL_HORIZONS, HORIZONS_TO_PLOT, VERBOSE_EVALUATION,
     PRINT_METRICS_PER_HORIZON, PLOT_FIGSIZE_SCATTER, PLOT_FIGSIZE_TIMESERIES,
-    MODELS_DIR, get_enabled_models, SAVE_PLOTS, PLOTS_DIR, PLOT_FORMAT, PLOT_DPI
+    MODELS_DIR, get_enabled_models, SAVE_PLOTS, PLOTS_DIR, PLOT_FORMAT, PLOT_DPI,
+    load_data, load_trained_models
 )
-import joblib
 
-
-def load_trained_models():
-    """
-    Load previously trained models from disk.
-    
-    Supports multiple formats:
-    - ONNX format (.onnx) with joblib backup
-    - Joblib format (.joblib)
-    - Pickle format (.pkl)
-    
-    Returns:
-        dict: Dictionary of loaded models {model_name: model_object}
-              Empty dict if no models found or loading fails
-    
-    Raises:
-        FileNotFoundError: If MODELS_DIR doesn't exist
-    """
-    loaded_models = {}
-    
-    if not os.path.exists(MODELS_DIR):
-        print(f"✗ Models directory not found: {MODELS_DIR}")
-        return loaded_models
-    
-    print(f"\n{'='*70}")
-    print(f"Loading trained models from '{MODELS_DIR}/'...")
-    print(f"{'='*70}\n")
-    
-    try:
-        # Try to load models for each enabled model type
-        for model_name in get_enabled_models().keys():
-            model_filename = f"{model_name.replace(' ', '_').replace('(', '').replace(')', '').lower()}"
-            
-            # Try loading in order of preference: backup joblib -> joblib -> pickle -> ONNX
-            backup_path = os.path.join(MODELS_DIR, f"{model_filename}_backup.joblib")
-            joblib_path = os.path.join(MODELS_DIR, f"{model_filename}.joblib")
-            pickle_path = os.path.join(MODELS_DIR, f"{model_filename}.pkl")
-            onnx_path = os.path.join(MODELS_DIR, f"{model_filename}.onnx")
-            
-            model = None
-            loaded_from = None
-            
-            # Priority 1: Backup joblib (for ONNX-converted models)
-            if os.path.exists(backup_path):
-                try:
-                    model = joblib.load(backup_path)
-                    loaded_from = "backup joblib (ONNX model)"
-                except Exception as e:
-                    print(f"  ⚠️  Failed to load {model_name} from backup: {e}")
-            
-            # Priority 2: Regular joblib
-            if model is None and os.path.exists(joblib_path):
-                try:
-                    model = joblib.load(joblib_path)
-                    loaded_from = "joblib"
-                except Exception as e:
-                    print(f"  ⚠️  Failed to load {model_name} from joblib: {e}")
-            
-            # Priority 3: Pickle
-            if model is None and os.path.exists(pickle_path):
-                try:
-                    import pickle
-                    with open(pickle_path, 'rb') as f:
-                        model = pickle.load(f)
-                    loaded_from = "pickle"
-                except Exception as e:
-                    print(f"  ⚠️  Failed to load {model_name} from pickle: {e}")
-            
-            # Priority 4: ONNX (warning: requires ONNX runtime, returns reference only)
-            if model is None and os.path.exists(onnx_path):
-                print(f"  ℹ️  {model_name}: ONNX file exists but requires ONNX Runtime for inference")
-                print(f"      Use backup joblib instead (recommended)")
-                continue
-            
-            # Report result
-            if model is not None:
-                loaded_models[model_name] = model
-                print(f"  ✓ {model_name:<20} loaded from {loaded_from}")
-            else:
-                print(f"  ✗ {model_name:<20} not found (no saved model file)")
-    
-    except Exception as e:
-        print(f"\n✗ Error loading models: {e}")
-    
-    print(f"\n{'='*70}")
-    print(f"Loaded {len(loaded_models)} model(s) successfully")
-    print(f"{'='*70}\n")
-    
-    if not loaded_models:
-        print("⚠️  No trained models found. Please train models first using model_train.py")
-    
-    return loaded_models
 
 def calculate_metrics(y_true, y_pred_array, model_name="Model", is_test_set=False):
     """
