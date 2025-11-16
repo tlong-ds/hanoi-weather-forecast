@@ -5,6 +5,7 @@ import json
 import numpy as np
 import pandas as pd
 import optuna
+from clearml import Task, Logger
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.metrics import mean_squared_error
@@ -24,6 +25,13 @@ from hourly_forecast_model.helper import (
 # Tuning configuration
 N_TRIALS = 100
 RANDOM_STATE = 42
+
+# =============== INITIALIZE CLEARML TASK ===============
+task = Task.init(
+    project_name="HanoiTemp_Forecast",
+    task_name="Hourly_Forecast_MultiOutput_Tuning"
+)
+logger = Logger.current_logger()
 
 
 def objective_random_forest(trial, X_train, y_train, X_dev, y_dev):
@@ -50,6 +58,11 @@ def objective_random_forest(trial, X_train, y_train, X_dev, y_dev):
                      for i in range(y_dev.shape[1])]
     avg_rmse = np.mean(rmse_per_hour)
     
+    # Log to ClearML
+    logger.report_scalar("RandomForest_RMSE", "avg", avg_rmse, trial.number)
+    for i, rmse in enumerate(rmse_per_hour, 1):
+        logger.report_scalar("RandomForest_RMSE", f"t+{i}h", rmse, trial.number)
+    
     return avg_rmse
 
 
@@ -75,6 +88,11 @@ def objective_xgboost(trial, X_train, y_train, X_dev, y_dev):
     rmse_per_hour = [np.sqrt(mean_squared_error(y_dev.iloc[:, i], y_pred[:, i])) 
                      for i in range(y_dev.shape[1])]
     avg_rmse = np.mean(rmse_per_hour)
+    
+    # Log to ClearML
+    logger.report_scalar("XGBoost_RMSE", "avg", avg_rmse, trial.number)
+    for i, rmse in enumerate(rmse_per_hour, 1):
+        logger.report_scalar("XGBoost_RMSE", f"t+{i}h", rmse, trial.number)
     
     return avg_rmse
 
@@ -104,6 +122,11 @@ def objective_lightgbm(trial, X_train, y_train, X_dev, y_dev):
                      for i in range(y_dev.shape[1])]
     avg_rmse = np.mean(rmse_per_hour)
     
+    # Log to ClearML
+    logger.report_scalar("LightGBM_RMSE", "avg", avg_rmse, trial.number)
+    for i, rmse in enumerate(rmse_per_hour, 1):
+        logger.report_scalar("LightGBM_RMSE", f"t+{i}h", rmse, trial.number)
+    
     return avg_rmse
 
 
@@ -127,6 +150,11 @@ def objective_catboost(trial, X_train, y_train, X_dev, y_dev):
     rmse_per_hour = [np.sqrt(mean_squared_error(y_dev.iloc[:, i], y_pred[:, i])) 
                      for i in range(y_dev.shape[1])]
     avg_rmse = np.mean(rmse_per_hour)
+    
+    # Log to ClearML
+    logger.report_scalar("CatBoost_RMSE", "avg", avg_rmse, trial.number)
+    for i, rmse in enumerate(rmse_per_hour, 1):
+        logger.report_scalar("CatBoost_RMSE", f"t+{i}h", rmse, trial.number)
     
     return avg_rmse
 
@@ -189,6 +217,10 @@ def tune_model(model_name, X_train, y_train, X_dev, y_dev, n_trials=N_TRIALS):
         print(f"  {param}: {value}")
     print(f"{'='*70}\n")
     
+    # Log best result to ClearML
+    logger.report_scalar("Best_Model_RMSE", model_name, best_rmse, 0)
+    logger.report_text(f"{model_name} Best RMSE: {best_rmse:.4f}°C", level="INFO")
+    
     return {
         'model': model_name,
         'best_rmse': float(best_rmse),
@@ -238,6 +270,10 @@ def main():
     print(f"\n🏆 Best Model: {best_model[0]} (RMSE: {best_model[1]['best_rmse']:.4f}°C)")
     print(f"{'='*70}\n")
     
+    # Log final summary to ClearML
+    logger.report_text(f"Best Overall Model: {best_model[0]} (RMSE: {best_model[1]['best_rmse']:.4f}°C)", level="INFO")
+    logger.report_scalar("Final_Best_RMSE", "Winner", best_model[1]['best_rmse'], 0)
+    
     # Save results
     results_dir = os.path.join(PROJECT_ROOT, 'src', 'hourly_forecast_model', 'final')
     os.makedirs(results_dir, exist_ok=True)
@@ -264,6 +300,7 @@ def main():
     
     print(f"✓ Best model config saved to: {best_config_file}")
     print("\n✅ Tuning complete!")
+    print("🎉 All results logged to ClearML!")
 
 
 if __name__ == "__main__":
