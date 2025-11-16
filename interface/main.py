@@ -6,6 +6,20 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
+import json
+import os
+
+# ML forecaster (optional)
+try:
+    from src.daily_forecast_model.infer import WeatherForecaster
+except Exception:
+    WeatherForecaster = None
+
+# HTTP client for remote API
+try:
+    import requests
+except Exception:
+    requests = None
 
 # ========================================
 
@@ -263,6 +277,88 @@ else:
 
 st.sidebar.markdown("---")
 
+# Option to enable ML predictions
+use_ml = st.sidebar.checkbox("Enable ML 5-day predictions (WeatherForecaster)", value=True)
+
+if use_ml:
+    # Lazy-load forecaster and keep in session state to avoid reloading repeatedly
+    if 'forecaster' not in st.session_state:
+        if WeatherForecaster is None:
+            st.sidebar.error("WeatherForecaster import failed. Ensure src.daily_forecast_model is available.")
+            st.session_state['forecaster'] = None
+        else:
+            try:
+                st.sidebar.info("Loading ML models (this may take a few seconds)...")
+                st.session_state['forecaster'] = WeatherForecaster()
+                st.sidebar.success("ML models loaded")
+            except Exception as e:
+                st.session_state['forecaster'] = None
+                st.sidebar.error(f"Failed to load models: {e}")
+else:
+    st.session_state['forecaster'] = None
+
+# Remote API option (from API_DESIGN.md)
+use_remote_api = st.sidebar.checkbox("Use remote API (FastAPI)", value=False)
+api_base = st.sidebar.text_input("API base URL", value="http://localhost:8000/api/v1")
+api_key = st.sidebar.text_input("API key (optional)", value="", type="password")
+
+# Options matching API_DESIGN.md
+include_metadata = st.sidebar.checkbox("Include metadata in API response", value=False)
+include_confidence = st.sidebar.checkbox("Include confidence intervals in API response", value=False)
+
+
+@st.cache_data(ttl=120)
+def fetch_daily_from_api(date_str, location=DEFAULT_LOCATION, include_metadata=False, include_confidence=False, hours_ahead=24):
+    """Call remote /forecast/daily endpoint. Returns parsed JSON or raises."""
+    if requests is None:
+        raise RuntimeError("requests library not available")
+    url = f"{api_base.rstrip('/')}/forecast/daily"
+    payload = {
+        "location": location,
+        "date": date_str,
+        "include_metadata": include_metadata,
+        "include_confidence": include_confidence
+    }
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    resp = requests.post(url, json=payload, headers=headers, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+
+@st.cache_data(ttl=60)
+def fetch_hourly_from_api(reference_datetime, location=DEFAULT_LOCATION, include_confidence=False, hours_ahead=24):
+    """Call remote /forecast/hourly endpoint. Returns parsed JSON or raises."""
+    if requests is None:
+        raise RuntimeError("requests library not available")
+    url = f"{api_base.rstrip('/')}/forecast/hourly"
+    payload = {
+        "location": location,
+        "datetime": reference_datetime,
+        "include_confidence": include_confidence,
+        "hours_ahead": hours_ahead
+    }
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    resp = requests.post(url, json=payload, headers=headers, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+
+@st.cache_data(ttl=60)
+def get_api_health():
+    if requests is None:
+        return None
+    try:
+        url = f"{api_base.rstrip('/')}/health"
+        r = requests.get(url, timeout=5)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return None
+
 
 # ========================================
 # CHECK DATA
@@ -330,7 +426,6 @@ with left_col:
 
     #======================
     # HOURLY TEMP
-    hourly_today = hourly_df[hourly_df.index.date == selected_date]
 
     # Icon map
     icon_map = {
@@ -346,6 +441,49 @@ with left_col:
     def icon_from_code(code):
         return icon_map.get(str(code), "❓")
 
+    # Prepare hourly source: remote API (if enabled) or local dataframe
+    hourly_api_ok = False
+    predicted_by_hour = {}
+    temp_fallback = 20
+    current_hour = pd.Timestamp.now().hour
+
+    if use_remote_api and requests is not None:
+        try:
+            with st.spinner("Fetching remote hourly forecast..."):
+                ref_dt_str = selected_ts.strftime('%Y-%m-%dT%H:00:00')
+                api_resp = fetch_hourly_from_api(
+                    reference_datetime=ref_dt_str,
+                    location=DEFAULT_LOCATION,
+                    include_confidence=include_confidence,
+                    hours_ahead=24
+                )
+
+            if api_resp and api_resp.get('status') == 'success' and 'predictions' in api_resp:
+                preds = api_resp['predictions']
+                base_hour = pd.to_datetime(api_resp.get('reference_datetime', ref_dt_str)).hour
+                for p in preds:
+                    try:
+                        tgt = p.get('target', '')
+                        offset = int(tgt.split('+')[1]) if '+' in tgt else None
+                    except Exception:
+                        offset = None
+                    if offset is None:
+                        # fallback sequential mapping
+                        offset = preds.index(p) + 1
+                    hour_index = (base_hour + offset) % 24
+                    predicted_by_hour[hour_index] = p.get('temperature')
+
+                temp_fallback = float(list(predicted_by_hour.values())[0]) if predicted_by_hour else 20
+                hourly_api_ok = True
+        except Exception as e:
+            st.error(f"Failed to fetch remote hourly forecast: {e}")
+            hourly_api_ok = False
+
+    if not hourly_api_ok:
+        # fallback to local hourly_df for the selected date
+        hourly_today = hourly_df[hourly_df.index.date == selected_date]
+        temp_fallback = hourly_today['temp'].mean() if not hourly_today.empty else temp_fallback
+
     # --- Build scroll ngang ---
     html = '''
     <div style="
@@ -358,21 +496,27 @@ with left_col:
         height:120px;">
     '''
 
-    current_hour = pd.Timestamp.now().hour
-    temp_fallback = hourly_today['temp'].mean() if not hourly_today.empty else 20
-
     for hour in range(24):
-        row = hourly_today[hourly_today.index.hour == hour] if not hourly_today.empty else None
-        if row is not None and not row.empty:
-            temp = f"{row.iloc[0]['temp']:.0f}°"
-            icon = icon_from_code(row.iloc[0]['icon'])
+        if hourly_api_ok and hour in predicted_by_hour:
+            temp = f"{predicted_by_hour[hour]:.0f}°"
+            icon = '🌤️'
         else:
-            temp = f"{temp_fallback:.0f}°"
-            icon = "❓"
-        
+            # local fallback if available
+            if not hourly_api_ok and not hourly_today.empty:
+                row = hourly_today[hourly_today.index.hour == hour]
+                if row is not None and not row.empty:
+                    temp = f"{row.iloc[0]['temp']:.0f}°"
+                    icon = icon_from_code(row.iloc[0]['icon'])
+                else:
+                    temp = f"{temp_fallback:.0f}°"
+                    icon = "❓"
+            else:
+                temp = f"{temp_fallback:.0f}°"
+                icon = "❓"
+
         label = "Now" if hour == current_hour else f"{hour}:00"
         border = "2px solid #3b82f6" if hour == current_hour else "none"
-        
+
         html += f"""
         <div style="
             flex:0 0 auto;
@@ -396,42 +540,132 @@ with left_col:
 
 
     # 5-Day Forecast
-    st.markdown('<h3 style="color: #ffffff; font-size: 30px; margin: 30px 0 15px 0;">📅 5-Day Forecast</h3>', unsafe_allow_html=True)
-    forecast_days = weather_df.loc[weather_df.index >= selected_ts].head(5) 
+    st.markdown("""<h3 style="color: #ffffff; font-size: 30px; margin: 30px 0 15px 0;">📅 5-Day Forecast</h3>""", unsafe_allow_html=True)
 
+    # If remote API is enabled, call it according to API_DESIGN.md
+    used_remote = False
+    if use_remote_api:
+        try:
+            with st.spinner("Fetching remote 5-day forecast..."):
+                api_resp = fetch_daily_from_api(
+                    date_str=selected_ts.strftime('%Y-%m-%d'),
+                    location=DEFAULT_LOCATION,
+                    include_metadata=include_metadata,
+                    include_confidence=include_confidence
+                )
 
+            if api_resp and api_resp.get('status') == 'success' and 'predictions' in api_resp:
+                preds = api_resp['predictions']
+                cols = st.columns(5)
+                # Render each prediction card per API schema
+                for i in range(5):
+                    with cols[i]:
+                        if i < len(preds):
+                            p = preds[i]
+                            target = p.get('target', '')
+                            fdate = p.get('forecast_date', '')
+                            temp = p.get('temperature', None)
+                            unit = p.get('unit', 'celsius')
+                            ci = p.get('confidence_interval')
+                            perf = p.get('model_performance')
 
-    cols = st.columns(min(5, len(forecast_days)))
-    for i, (idx, row) in enumerate(forecast_days.iterrows()):
-        if i < len(cols):
-            with cols[i]:
-                icon_emoji, _ = get_weather_icon_and_text(row.get('icon', ''), row.get('conditions', ''))
-                precip_prob = row.get('precipprob', 0)
-                
-                st.markdown(f"""
-                    <div class="forecast-card">
-                        <div style="font-weight:600; color:#e0e7ff; font-size: 14px; margin-bottom: 10px;">
-                            {idx.strftime('%a, %b %d')}
+                            display_temp = 'N/A' if temp is None else f"{temp:.1f}°C"
+                            ci_html = ''
+                            if ci and include_confidence:
+                                try:
+                                    lower = ci.get('lower')
+                                    upper = ci.get('upper')
+                                    clevel = ci.get('confidence_level', '')
+                                    ci_html = f"<div style='color:#94a3b8; font-size:12px;'>CI({clevel}): {lower:.1f}° / {upper:.1f}°</div>"
+                                except Exception:
+                                    ci_html = ''
+
+                            perf_html = ''
+                            if perf and include_metadata:
+                                try:
+                                    rmse = perf.get('test_rmse')
+                                    mae = perf.get('test_mae')
+                                    r2 = perf.get('test_r2')
+                                    perf_html = f"<div style='color:#94a3b8; font-size:12px;'>RMSE: {rmse:.2f} • MAE: {mae:.2f} • R2: {r2:.3f}</div>"
+                                except Exception:
+                                    perf_html = ''
+
+                            st.markdown(f"""
+                                <div class="forecast-card">
+                                    <div style="font-weight:600; color:#e0e7ff; font-size: 14px; margin-bottom: 10px;">
+                                        {pd.to_datetime(fdate).strftime('%a, %b %d') if fdate else 'N/A'}
+                                    </div>
+                                    <div style="font-size:42px; margin:12px 0;">
+                                        🌤️
+                                    </div>
+                                    <div style="color:#ffffff; font-size:22px; font-weight:700; margin: 8px 0;">
+                                        {display_temp}
+                                    </div>
+                                    {ci_html}
+                                    {perf_html}
+                                </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            # Empty placeholder if API returned fewer than 5
+                            st.markdown("""
+                                <div class="forecast-card">
+                                    <div style="font-weight:600; color:#e0e7ff; font-size: 14px; margin-bottom: 10px;">-</div>
+                                    <div style="font-size:42px; margin:12px 0;">-</div>
+                                    <div style="color:#ffffff; font-size:22px; font-weight:700; margin: 8px 0;">-</div>
+                                </div>
+                            """, unsafe_allow_html=True)
+
+                used_remote = True
+            else:
+                err = api_resp.get('error') if isinstance(api_resp, dict) else 'Unexpected response'
+                st.error(f"Remote API returned an error: {err}")
+        except Exception as e:
+            # Show a clear error and fallback to raw-data display
+            msg = str(e)
+            # If requests HTTPError with response JSON, try to extract message
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    err_json = e.response.json()
+                    msg = err_json.get('error', err_json.get('detail', msg))
+                except Exception:
+                    pass
+            st.error(f"Failed to fetch remote forecast: {msg}")
+
+    # If remote not used or failed, fallback to raw-data display (no ML calls)
+    if not used_remote:
+        forecast_days = weather_df.loc[weather_df.index >= selected_ts].head(5)
+
+        cols = st.columns(min(5, len(forecast_days)))
+        for i, (idx, row) in enumerate(forecast_days.iterrows()):
+            if i < len(cols):
+                with cols[i]:
+                    icon_emoji, _ = get_weather_icon_and_text(row.get('icon', ''), row.get('conditions', ''))
+                    precip_prob = row.get('precipprob', 0)
+                    
+                    st.markdown(f"""
+                        <div class="forecast-card">
+                            <div style="font-weight:600; color:#e0e7ff; font-size: 14px; margin-bottom: 10px;">
+                                {idx.strftime('%a, %b %d')}
+                            </div>
+                            <div style="font-size:42px; margin:12px 0; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">
+                                {icon_emoji}
+                            </div>
+                            <div style="color:#ffffff; font-size:22px; font-weight:700; margin: 8px 0;">
+                                {row['temp']:.0f}°C
+                            </div>
+                            <div style="color:#94a3b8; font-size:13px; margin-bottom: 8px;">
+                                {row['tempmin']:.0f}° / {row['tempmax']:.0f}°
+                            </div>
+                            <div style="color:#60a5fa; font-size:12px; background: rgba(96,165,250,0.1); 
+                                        padding: 4px 8px; border-radius: 8px; display: inline-block;">
+                                💧 {precip_prob:.0f}%
+                            </div>
                         </div>
-                        <div style="font-size:42px; margin:12px 0; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">
-                            {icon_emoji}
-                        </div>
-                        <div style="color:#ffffff; font-size:22px; font-weight:700; margin: 8px 0;">
-                            {row['temp']:.0f}°C
-                        </div>
-                        <div style="color:#94a3b8; font-size:13px; margin-bottom: 8px;">
-                            {row['tempmin']:.0f}° / {row['tempmax']:.0f}°
-                        </div>
-                        <div style="color:#60a5fa; font-size:12px; background: rgba(96,165,250,0.1); 
-                                    padding: 4px 8px; border-radius: 8px; display: inline-block;">
-                            💧 {precip_prob:.0f}%
-                        </div>
-                    </div>
-                """, unsafe_allow_html=True)
+                    """, unsafe_allow_html=True)
 
 
     # 🧭 Weekly Forecast Chart
-    st.markdown('<h3 style="color: #ffffff; font-size: 30px; margin: 30px 0 15px 0;">📈 Weekly Temperature Trend</h3>', unsafe_allow_html=True)
+    st.markdown("""<h3 style="color: #ffffff; font-size: 30px; margin: 30px 0 15px 0;">📈 Weekly Temperature Trend</h3>""", unsafe_allow_html=True)
     selected_ts = pd.to_datetime(selected_date)
     weekly_df = weather_df.loc[weather_df.index >= selected_ts].head(7)
 
