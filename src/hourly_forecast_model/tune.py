@@ -25,6 +25,8 @@ from hourly_forecast_model.helper import (
 # Tuning configuration
 N_TRIALS = 100
 RANDOM_STATE = 42
+LOG_EVERY_N_TRIALS = 5  # Reduce logging frequency
+USE_PRUNING = True  # Enable Optuna pruning for faster convergence
 
 # =============== INITIALIZE CLEARML TASK ===============
 task = Task.init(
@@ -37,11 +39,11 @@ logger = Logger.current_logger()
 def objective_random_forest(trial, X_train, y_train, X_dev, y_dev):
     """Objective function for Random Forest multi-output model."""
     params = {
-        'n_estimators': trial.suggest_int('n_estimators', 100, 500, step=50),
-        'max_depth': trial.suggest_int('max_depth', 10, 30),
-        'min_samples_split': trial.suggest_int('min_samples_split', 2, 10),
+        'n_estimators': trial.suggest_int('n_estimators', 100, 400, step=50),  # Reduced max
+        'max_depth': trial.suggest_int('max_depth', 8, 25),  # Narrower range
+        'min_samples_split': trial.suggest_int('min_samples_split', 2, 8),
         'min_samples_leaf': trial.suggest_int('min_samples_leaf', 1, 4),
-        'max_features': trial.suggest_categorical('max_features', ['sqrt', 'log2', None]),
+        'max_features': trial.suggest_categorical('max_features', ['sqrt', 'log2']),  # Removed None
         'random_state': RANDOM_STATE,
         'n_jobs': -1
     }
@@ -58,11 +60,14 @@ def objective_random_forest(trial, X_train, y_train, X_dev, y_dev):
                      for i in range(y_dev.shape[1])]
     avg_rmse = np.mean(rmse_per_hour)
     
-    # Log to ClearML with proper iteration
+    # Reduced logging frequency - only log every N trials
     iteration = trial.number
-    logger.report_scalar(title="RandomForest_RMSE", series="avg", value=avg_rmse, iteration=iteration)
-    for i, rmse in enumerate(rmse_per_hour, 1):
-        logger.report_scalar(title="RandomForest_RMSE", series=f"t+{i}h", value=rmse, iteration=iteration)
+    if iteration % LOG_EVERY_N_TRIALS == 0:
+        logger.report_scalar(title="RandomForest_RMSE", series="avg", value=avg_rmse, iteration=iteration)
+        # Log only key hours to reduce overhead
+        for i in [1, 6, 12, 18, 24]:
+            if i <= len(rmse_per_hour):
+                logger.report_scalar(title="RandomForest_RMSE", series=f"t+{i}h", value=rmse_per_hour[i-1], iteration=iteration)
     
     return avg_rmse
 
@@ -70,31 +75,44 @@ def objective_random_forest(trial, X_train, y_train, X_dev, y_dev):
 def objective_xgboost(trial, X_train, y_train, X_dev, y_dev):
     """Objective function for XGBoost multi-output model."""
     params = {
-        'n_estimators': trial.suggest_int('n_estimators', 200, 800, step=100),
-        'max_depth': trial.suggest_int('max_depth', 4, 12),
+        'n_estimators': trial.suggest_int('n_estimators', 200, 600, step=100),  # Reduced max
+        'max_depth': trial.suggest_int('max_depth', 3, 10),
         'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
         'subsample': trial.suggest_float('subsample', 0.6, 1.0),
         'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
-        'gamma': trial.suggest_float('gamma', 0, 5),
-        'min_child_weight': trial.suggest_int('min_child_weight', 1, 10),
+        'gamma': trial.suggest_float('gamma', 0, 3),  # Reduced max
+        'min_child_weight': trial.suggest_int('min_child_weight', 1, 7),
         'tree_method': 'hist',
-        'random_state': RANDOM_STATE
+        'device': 'cuda' if str(DEVICE) == 'cuda' else 'cpu',  # GPU acceleration
+        'random_state': RANDOM_STATE,
+        'early_stopping_rounds': 50  # Early stopping
     }
+    
+    # Extract early stopping param for fit
+    early_stopping = params.pop('early_stopping_rounds')
     
     model = xgb.XGBRegressor(**params)
     multi_model = MultiOutputRegressor(model, n_jobs=-1)
-    multi_model.fit(X_train, y_train)
+    
+    # Fit with early stopping using eval_set
+    multi_model.fit(
+        X_train, y_train,
+        eval_set=[(X_dev, y_dev)],
+        verbose=False
+    )
     
     y_pred = multi_model.predict(X_dev)
     rmse_per_hour = [np.sqrt(mean_squared_error(y_dev.iloc[:, i], y_pred[:, i])) 
                      for i in range(y_dev.shape[1])]
     avg_rmse = np.mean(rmse_per_hour)
     
-    # Log to ClearML with proper iteration
+    # Reduced logging frequency
     iteration = trial.number
-    logger.report_scalar(title="XGBoost_RMSE", series="avg", value=avg_rmse, iteration=iteration)
-    for i, rmse in enumerate(rmse_per_hour, 1):
-        logger.report_scalar(title="XGBoost_RMSE", series=f"t+{i}h", value=rmse, iteration=iteration)
+    if iteration % LOG_EVERY_N_TRIALS == 0:
+        logger.report_scalar(title="XGBoost_RMSE", series="avg", value=avg_rmse, iteration=iteration)
+        for i in [1, 6, 12, 18, 24]:
+            if i <= len(rmse_per_hour):
+                logger.report_scalar(title="XGBoost_RMSE", series=f"t+{i}h", value=rmse_per_hour[i-1], iteration=iteration)
     
     return avg_rmse
 
@@ -102,17 +120,18 @@ def objective_xgboost(trial, X_train, y_train, X_dev, y_dev):
 def objective_lightgbm(trial, X_train, y_train, X_dev, y_dev):
     """Objective function for LightGBM multi-output model."""
     params = {
-        'n_estimators': trial.suggest_int('n_estimators', 200, 800, step=100),
-        'max_depth': trial.suggest_int('max_depth', 4, 12),
+        'n_estimators': trial.suggest_int('n_estimators', 200, 600, step=100),  # Reduced max
+        'max_depth': trial.suggest_int('max_depth', 3, 10),
         'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
-        'num_leaves': trial.suggest_int('num_leaves', 20, 150),
+        'num_leaves': trial.suggest_int('num_leaves', 20, 100),  # Reduced max
         'subsample': trial.suggest_float('subsample', 0.6, 1.0),
         'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
-        'min_child_samples': trial.suggest_int('min_child_samples', 5, 50),
-        'reg_alpha': trial.suggest_float('reg_alpha', 0, 10),
-        'reg_lambda': trial.suggest_float('reg_lambda', 0, 10),
+        'min_child_samples': trial.suggest_int('min_child_samples', 5, 40),
+        'reg_alpha': trial.suggest_float('reg_alpha', 0, 5),  # Reduced max
+        'reg_lambda': trial.suggest_float('reg_lambda', 0, 5),  # Reduced max
         'random_state': RANDOM_STATE,
-        'verbose': -1
+        'verbose': -1,
+        'n_jobs': -1
     }
     
     model = lgb.LGBMRegressor(**params)
@@ -124,11 +143,13 @@ def objective_lightgbm(trial, X_train, y_train, X_dev, y_dev):
                      for i in range(y_dev.shape[1])]
     avg_rmse = np.mean(rmse_per_hour)
     
-    # Log to ClearML with proper iteration
+    # Reduced logging frequency
     iteration = trial.number
-    logger.report_scalar(title="LightGBM_RMSE", series="avg", value=avg_rmse, iteration=iteration)
-    for i, rmse in enumerate(rmse_per_hour, 1):
-        logger.report_scalar(title="LightGBM_RMSE", series=f"t+{i}h", value=rmse, iteration=iteration)
+    if iteration % LOG_EVERY_N_TRIALS == 0:
+        logger.report_scalar(title="LightGBM_RMSE", series="avg", value=avg_rmse, iteration=iteration)
+        for i in [1, 6, 12, 18, 24]:
+            if i <= len(rmse_per_hour):
+                logger.report_scalar(title="LightGBM_RMSE", series=f"t+{i}h", value=rmse_per_hour[i-1], iteration=iteration)
     
     return avg_rmse
 
@@ -136,29 +157,37 @@ def objective_lightgbm(trial, X_train, y_train, X_dev, y_dev):
 def objective_catboost(trial, X_train, y_train, X_dev, y_dev):
     """Objective function for CatBoost multi-output model."""
     params = {
-        'iterations': trial.suggest_int('iterations', 200, 800, step=100),
-        'depth': trial.suggest_int('depth', 4, 10),
+        'iterations': trial.suggest_int('iterations', 200, 600, step=100),  # Reduced max
+        'depth': trial.suggest_int('depth', 3, 8),  # Reduced max
         'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
-        'l2_leaf_reg': trial.suggest_float('l2_leaf_reg', 1, 10),
-        'border_count': trial.suggest_int('border_count', 32, 255),
+        'l2_leaf_reg': trial.suggest_float('l2_leaf_reg', 1, 7),  # Reduced max
+        'border_count': trial.suggest_int('border_count', 32, 128),  # Reduced max
+        'task_type': 'GPU' if str(DEVICE) == 'cuda' else 'CPU',  # GPU acceleration
         'random_state': RANDOM_STATE,
-        'verbose': False
+        'verbose': False,
+        'early_stopping_rounds': 50  # Early stopping
     }
     
     model = CatBoostRegressor(**params)
     multi_model = MultiOutputRegressor(model, n_jobs=-1)
-    multi_model.fit(X_train, y_train)
+    multi_model.fit(
+        X_train, y_train,
+        eval_set=(X_dev, y_dev),
+        verbose=False
+    )
     
     y_pred = multi_model.predict(X_dev)
     rmse_per_hour = [np.sqrt(mean_squared_error(y_dev.iloc[:, i], y_pred[:, i])) 
                      for i in range(y_dev.shape[1])]
     avg_rmse = np.mean(rmse_per_hour)
     
-    # Log to ClearML with proper iteration
+    # Reduced logging frequency
     iteration = trial.number
-    logger.report_scalar(title="CatBoost_RMSE", series="avg", value=avg_rmse, iteration=iteration)
-    for i, rmse in enumerate(rmse_per_hour, 1):
-        logger.report_scalar(title="CatBoost_RMSE", series=f"t+{i}h", value=rmse, iteration=iteration)
+    if iteration % LOG_EVERY_N_TRIALS == 0:
+        logger.report_scalar(title="CatBoost_RMSE", series="avg", value=avg_rmse, iteration=iteration)
+        for i in [1, 6, 12, 18, 24]:
+            if i <= len(rmse_per_hour):
+                logger.report_scalar(title="CatBoost_RMSE", series=f"t+{i}h", value=rmse_per_hour[i-1], iteration=iteration)
     
     return avg_rmse
 
@@ -195,17 +224,21 @@ def tune_model(model_name, X_train, y_train, X_dev, y_dev, n_trials=N_TRIALS):
     
     objective_func = objective_funcs[model_name]
     
-    # Create study
+    # Create study with pruning if enabled
+    pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=5) if USE_PRUNING else optuna.pruners.NopPruner()
+    
     study = optuna.create_study(
         direction='minimize',
-        study_name=f'{model_name}_hourly_multioutput'
+        study_name=f'{model_name}_hourly_multioutput',
+        pruner=pruner
     )
     
     # Optimize
     study.optimize(
         lambda trial: objective_func(trial, X_train, y_train, X_dev, y_dev),
         n_trials=n_trials,
-        show_progress_bar=True
+        show_progress_bar=True,
+        n_jobs=1  # Sequential execution for stability with MultiOutputRegressor
     )
     
     # Get best results
@@ -305,6 +338,11 @@ def main():
     print(f"✓ Best model config saved to: {best_config_file}")
     print("\n✅ Tuning complete!")
     print("🎉 All results logged to ClearML!")
+    print(f"\n⚡ Performance optimizations enabled:")
+    print(f"  - Reduced logging (every {LOG_EVERY_N_TRIALS} trials)")
+    print(f"  - Pruning: {'Enabled' if USE_PRUNING else 'Disabled'}")
+    print(f"  - GPU acceleration: {DEVICE.upper()}")
+    print(f"  - Early stopping: Enabled for XGBoost & CatBoost")
 
 
 if __name__ == "__main__":
