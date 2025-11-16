@@ -76,17 +76,19 @@ def load_model_config_from_results():
         with open(results_path, 'r') as f:
             best_params_per_target = json.load(f)
             
-            # Get model name from first target (all targets use same model)
+            # Get model name from first target (all targets use same model architecture)
             first_target = list(best_params_per_target.values())[0]
             model_name = first_target['model']
             
-            # For multi-output wrapper, use params from t+3 (middle target) as representative
-            # Or you could use t+1 for short-term bias
+            # Return per-target params directly (each target has optimized params)
+            # Note: This is for backward compatibility with MODEL_CONFIGS
+            # Actual training uses PER_TARGET_PARAMS directly
             representative_target = 't+3' if 't+3' in best_params_per_target else list(best_params_per_target.keys())[0]
             params = best_params_per_target[representative_target]['params']
             
-            print(f"✓ Loaded optimized {model_name} configuration from src/daily_forecast_model/final/best_params_per_target.json")
-            print(f"  Using {representative_target} parameters as representative for multi-output model")
+            print(f"✓ Loaded per-target optimized configurations from src/daily_forecast_model/final/best_params_per_target.json")
+            print(f"  Model architecture: {model_name}")
+            print(f"  Per-target params available for: {', '.join(best_params_per_target.keys())}")
             
             return model_name, params, best_params_per_target
             

@@ -13,7 +13,20 @@ from datetime import datetime, timedelta
 
 # Import configuration
 from src.daily_forecast_model.helper import (
-    PROJECT_ROOT, N_STEPS_AHEAD, MODELS_DIR
+    PROJECT_ROOT, MODELS_DIR, N_STEPS_AHEAD
+)
+
+# Import feature engineering functions and OutlierClipper for unpickling
+from src.daily_forecast_model.process import (
+    OutlierClipper,
+    create_lag_features,
+    create_rolling_features,
+    create_cyclical_wind_direction,
+    create_temporal_features,
+    create_day_length_feature,
+    create_interaction_features,
+    LAG_PERIODS,
+    ROLLING_WINDOWS
 )
 
 
@@ -71,14 +84,16 @@ class WeatherForecaster:
         for day_step in range(1, N_STEPS_AHEAD + 1):
             target_name = f"t+{day_step}"
             day_str = f"t_{day_step}"
-            data_dir = os.path.join(PROJECT_ROOT, 'processed_data', f'target_{day_str}')
-            preprocessor_path = os.path.join(data_dir, f'preprocessor_target_temp_t+{day_step}.joblib')
+            
+            # Preprocessors are stored in processed_data/pipelines/
+            preprocessor_path = os.path.join(PROJECT_ROOT, 'processed_data', 'pipelines', f'preprocessor_{day_str}.joblib')
             
             try:
                 self.preprocessors[target_name] = joblib.load(preprocessor_path)
                 print(f"  ✓ {target_name}: {preprocessor_path}")
                 
-                # Try to load feature names
+                # Try to load feature names from training data
+                data_dir = os.path.join(PROJECT_ROOT, 'processed_data', f'target_{day_str}')
                 feature_names_path = os.path.join(data_dir, f'X_train_t{day_step}.csv')
                 if os.path.exists(feature_names_path):
                     feature_df = pd.read_csv(feature_names_path, index_col=0, nrows=0)
@@ -97,26 +112,78 @@ class WeatherForecaster:
         """
         Apply feature engineering for a specific target.
         
+        This replicates the preprocessing pipeline:
+        1. Create temporal features (day, week, month, sin/cos encodings)
+        2. Create day length feature
+        3. Create cyclical wind direction (sin/cos)
+        4. Create interaction features (daylength_uv, windspeed_sq, etc.)
+        5. Create lag features (temp_lag1, temp_lag3, temp_lag7, etc.)
+        6. Create rolling window features
+        7. Apply scaling/normalization via preprocessor
+        
         Args:
-            raw_data (pd.DataFrame): Raw weather data with required columns
+            raw_data (pd.DataFrame): Raw weather data with datetime index
             target_name (str): Target horizon (e.g., 't+1', 't+2')
         
         Returns:
             pd.DataFrame: Transformed features ready for prediction
         """
-        # Apply preprocessing pipeline
-        preprocessor = self.preprocessors[target_name]
-        transformed_data = preprocessor.transform(raw_data)
+        # Make a copy to avoid modifying original
+        df = raw_data.copy()
         
-        # Convert to DataFrame with correct feature names
+        # Step 1: Create temporal features (includes sin/cos cyclical encodings)
+        df = create_temporal_features(df)
+        
+        # Step 2: Create day length feature
+        df = create_day_length_feature(df)
+        
+        # Step 3: Create cyclical wind direction
+        df = create_cyclical_wind_direction(df)
+        
+        # Step 4: Create interaction features (daylength_uv, etc.)
+        df = create_interaction_features(df)
+        
+        # Step 5: Create lag features
+        df = create_lag_features(df, lag_config=LAG_PERIODS)
+        
+        # Step 6: Create rolling window features
+        df = create_rolling_features(df, windows=ROLLING_WINDOWS)
+        
+        # Drop rows with NaN (due to lag/rolling window creation)
+        n_input_rows = len(raw_data)
+        df = df.dropna()
+        
+        if len(df) == 0:
+            # Calculate required minimum data
+            max_lag = max(max(lags) for lags in LAG_PERIODS.values())
+            max_window = max(ROLLING_WINDOWS) if ROLLING_WINDOWS else 0
+            min_required = max(max_lag, max_window)
+            
+            raise ValueError(
+                f"No valid data after feature engineering. "
+                f"Need at least {min_required} historical records "
+                f"(max lag: {max_lag} days, max rolling window: {max_window} days). "
+                f"Provided data has {n_input_rows} rows, "
+                f"but all became NaN after lag/rolling features. "
+                f"Please provide at least {min_required + 5} rows for reliable predictions."
+            )
+        
+        # Step 7: Apply the fitted preprocessor (scaling/normalization)
+        preprocessor = self.preprocessors[target_name]
+        transformed_data = preprocessor.transform(df)
+        
+        # Convert to DataFrame with correct feature names and index from df (after dropna)
         if target_name in self.feature_names:
             transformed_df = pd.DataFrame(
                 transformed_data,
                 columns=self.feature_names[target_name],
-                index=raw_data.index
+                index=df.index  # Use df.index (after dropna), not raw_data.index
             )
         else:
-            transformed_df = pd.DataFrame(transformed_data, index=raw_data.index)
+            transformed_df = pd.DataFrame(
+                transformed_data,
+                index=df.index  # Use df.index (after dropna), not raw_data.index
+            )
         
         return transformed_df
     
@@ -130,8 +197,10 @@ class WeatherForecaster:
         
         Returns:
             pd.DataFrame: Predictions for all horizons with columns [t+1, t+2, ..., t+5]
+                Note: Index may be shorter than input due to NaN removal from lag features
         """
         predictions = {}
+        result_index = None
         
         for day_step in range(1, N_STEPS_AHEAD + 1):
             target_name = f"t+{day_step}"
@@ -139,73 +208,84 @@ class WeatherForecaster:
             # Prepare features for this target
             X = self.prepare_features(raw_data, target_name)
             
+            # Store the index from first target (all targets should have same index after feature engineering)
+            if result_index is None:
+                result_index = X.index
+            
             # Make prediction
             model = self.models[target_name]
             y_pred = model.predict(X)
             
             predictions[target_name] = y_pred
         
-        # Combine into DataFrame
-        predictions_df = pd.DataFrame(predictions, index=raw_data.index)
+        # Combine into DataFrame using the actual result index (after dropna)
+        predictions_df = pd.DataFrame(predictions, index=result_index)
         
         return predictions_df
     
     def predict_single(self, raw_data):
         """
         Generate forecast for a single time point (most recent in dataset).
+        Uses all historical data to compute lag/rolling features, then predicts for the last date.
         
         Args:
-            raw_data (pd.DataFrame): Raw weather data (uses last row)
+            raw_data (pd.DataFrame): Full historical raw weather data
         
         Returns:
             dict: Single forecast {target: temperature}
         """
-        # Use only the last row
-        last_data = raw_data.iloc[[-1]]
+        # Use all historical data for feature engineering, get predictions for all valid dates
+        predictions_df = self.predict(raw_data)
         
-        # Get predictions
-        predictions_df = self.predict(last_data)
+        if predictions_df is None or len(predictions_df) == 0:
+            print("✗ No valid predictions generated")
+            return None
         
-        # Return as dictionary
-        forecast = predictions_df.iloc[0].to_dict()
+        # Return the most recent prediction as dictionary
+        forecast = predictions_df.iloc[-1].to_dict()
         
         return forecast
     
     def predict_with_metadata(self, raw_data):
         """
-        Generate forecast with additional metadata.
+        Generate forecast with additional metadata for the most recent date.
+        Uses all historical data to compute lag/rolling features.
         
         Args:
-            raw_data (pd.DataFrame): Raw weather data
+            raw_data (pd.DataFrame): Full historical raw weather data
         
         Returns:
             dict: {
-                'predictions': DataFrame of predictions,
-                'forecast_dates': list of forecast dates,
+                'predictions': dict of {target: temperature},
+                'forecast_dates': list of forecast date strings,
                 'base_date': base date for forecast,
                 'model_info': model information
             }
         """
-        # Get predictions
-        predictions_df = self.predict(raw_data)
+        # Get single prediction using all historical data
+        predictions = self.predict_single(raw_data)
+        
+        if predictions is None:
+            return None
         
         # Get base date (last date in input)
         base_date = raw_data.index[-1]
         
         # Calculate forecast dates
-        forecast_dates = [base_date + timedelta(days=i) for i in range(1, N_STEPS_AHEAD + 1)]
+        forecast_dates = [(base_date + timedelta(days=i)).strftime('%Y-%m-%d') 
+                         for i in range(1, N_STEPS_AHEAD + 1)]
         
         # Get model info
         model_info = {
             'n_models': len(self.models),
             'horizons': list(self.models.keys()),
-            'models_dir': MODELS_DIR
+            'models_dir': str(MODELS_DIR)
         }
         
         return {
-            'predictions': predictions_df,
+            'predictions': predictions,
             'forecast_dates': forecast_dates,
-            'base_date': base_date,
+            'base_date': base_date.strftime('%Y-%m-%d'),
             'model_info': model_info
         }
 
@@ -219,46 +299,41 @@ def demo_prediction():
     # Initialize forecaster
     forecaster = WeatherForecaster()
     
-    # Load sample data (using test data as example)
-    print("Loading sample data...")
-    sample_data_path = os.path.join(PROJECT_ROOT, 'processed_data', 'target_t_1', 'X_test_t1.csv')
+    # Load raw weather data (before preprocessing)
+    print("Loading raw data...")
+    raw_data_path = os.path.join(PROJECT_ROOT, 'dataset', 'hn_daily.csv')
     
-    if not os.path.exists(sample_data_path):
-        print(f"✗ Sample data not found at: {sample_data_path}")
-        print("  Please run preprocessing first to generate test data.")
+    if not os.path.exists(raw_data_path):
+        print(f"✗ Raw data not found at: {raw_data_path}")
+        print("  Please ensure dataset/hn_daily.csv exists.")
         return
     
-    sample_data = pd.read_csv(sample_data_path, index_col=0, nrows=5)
-    print(f"✓ Loaded {len(sample_data)} sample records\n")
+    # Load raw data - need sufficient historical records for lag/rolling features
+    raw_data = pd.read_csv(raw_data_path, parse_dates=['datetime'])
+    raw_data.set_index('datetime', inplace=True)
     
-    # Make predictions
-    print("Generating predictions...")
-    predictions = forecaster.predict(sample_data)
+    print(f"✓ Loaded {len(raw_data)} total records")
+    print(f"  Most recent date: {raw_data.index[-1]}\n")
     
-    print("\nPredictions:")
-    print(predictions)
+    # Make single prediction from most recent data
+    print("Generating 5-day forecast from most recent data...")
+    result = forecaster.predict_single(raw_data)
     
-    # Single prediction example
-    print("\n" + "="*70)
-    print("Single Record Prediction Example:")
-    print("="*70)
-    
-    single_forecast = forecaster.predict_single(sample_data)
-    print("\nForecast:")
-    for target, temp in single_forecast.items():
-        print(f"  {target}: {temp:.2f}°C")
-    
-    # Prediction with metadata
-    print("\n" + "="*70)
-    print("Prediction with Metadata Example:")
-    print("="*70)
-    
-    result = forecaster.predict_with_metadata(sample_data)
-    print(f"\nBase date: {result['base_date']}")
-    print(f"Forecast dates: {result['forecast_dates'][0]} to {result['forecast_dates'][-1]}")
-    print(f"Models loaded: {result['model_info']['n_models']}")
-    
-    print("\n✅ Demo complete!")
+    if result is not None:
+        base_date = raw_data.index[-1]
+        forecast_dates = [(base_date + timedelta(days=i)).strftime('%Y-%m-%d') 
+                         for i in range(1, 6)]
+        
+        print("\n" + "="*70)
+        print("5-Day Temperature Forecast")
+        print("="*70)
+        print(f"Base date: {base_date.strftime('%Y-%m-%d')}")
+        print(f"\nPredictions:")
+        for target, temp in result.items():
+            print(f"  {target}: {temp:.2f}°C")
+        print(f"\nForecast dates: {', '.join(forecast_dates)}")
+        print("="*70)
+        print("\n✅ Demo complete!")
 
 
 if __name__ == "__main__":
