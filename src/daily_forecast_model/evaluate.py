@@ -1,254 +1,427 @@
+"""
+Evaluation module for per-target weather forecasting models.
+
+This module evaluates trained models on the test set and generates:
+- Per-target metrics (MAE, RMSE, MAPE, R²)
+- Visualizations (scatter plots, time series comparisons)
+- Comprehensive evaluation reports
+"""
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import json
+import joblib
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-# Import configuration and helper functions
-from daily_forecast_model.helper import (
-    TARGET_COLUMNS, SAVE_RESULTS, RESULTS_FILENAME, RESULTS_DIR,
-    PLOT_ALL_HORIZONS, HORIZONS_TO_PLOT, VERBOSE_EVALUATION,
-    PRINT_METRICS_PER_HORIZON, PLOT_FIGSIZE_SCATTER, PLOT_FIGSIZE_TIMESERIES,
-    MODELS_DIR, get_enabled_models, SAVE_PLOTS, PLOTS_DIR, PLOT_FORMAT, PLOT_DPI,
-    load_data, load_trained_models
+# Import configuration
+from src.daily_forecast_model.helper import (
+    PROJECT_ROOT, N_STEPS_AHEAD, MODELS_DIR, PLOTS_DIR,
+    SAVE_PLOTS, PLOT_FORMAT, PLOT_DPI, VERBOSE_EVALUATION
 )
 
 
-def calculate_metrics(y_true, y_pred_array, model_name="Model", is_test_set=False):
+def load_test_data_for_target(day_step):
     """
-    Calculate evaluation metrics for multi-step forecasting.
-    
-    For DEV set: MAE, RMSE, MAPE
-    For TEST set: MAE, RMSE, MAPE, R²
+    Load test data for specific target day.
     
     Args:
-        y_true (pd.DataFrame): DataFrame with actual values
-        y_pred_array (np.array): Predicted values from model.predict()
-        model_name (str): Model name for display
-        is_test_set (bool): If True, compute R² metric
-
+        day_step (int): Target day (1-5)
+    
     Returns:
-        tuple: (model_results dict, y_pred_df DataFrame)
+        tuple: (X_test, y_test) or (None, None) on error
     """
-    # Convert predictions to DataFrame
-    y_pred_df = pd.DataFrame(
-        y_pred_array, 
-        index=y_true.index, 
-        columns=TARGET_COLUMNS
-    )
+    day_str = f"t_{day_step}"
+    data_dir = os.path.join(PROJECT_ROOT, 'processed_data', f'target_{day_str}')
     
-    model_results = {}
-    data_type = "Test" if is_test_set else "Dev"
+    try:
+        X_test = pd.read_csv(os.path.join(data_dir, f'X_test_t{day_step}.csv'), index_col=0)
+        y_test = pd.read_csv(os.path.join(data_dir, f'y_test_t{day_step}.csv'), index_col=0)
+        
+        # Convert y to 1D array
+        y_test = y_test.values.ravel()
+        
+        if VERBOSE_EVALUATION:
+            print(f"  ✓ Test data loaded: {X_test.shape[0]} samples, {X_test.shape[1]} features")
+        
+        return X_test, y_test
     
-    print(f"\n{'='*70}")
-    print(f"Evaluation Results ({data_type} Set) - {model_name}")
-    print(f"{'='*70}")
-    
-    # Calculate metrics for each forecast horizon
-    if PRINT_METRICS_PER_HORIZON:
-        print(f"\nPer-Horizon Metrics:")
-        print(f"{'-'*70}")
-    
-    for horizon in TARGET_COLUMNS:
-        mae = mean_absolute_error(y_true[horizon], y_pred_df[horizon])
-        mse = mean_squared_error(y_true[horizon], y_pred_df[horizon])
-        rmse = np.sqrt(mse)
-        
-        # MAPE (Mean Absolute Percentage Error)
-        mape = np.mean(np.abs((y_true[horizon] - y_pred_df[horizon]) / y_true[horizon])) * 100
-        
-        model_results[f'{horizon}_MAE'] = mae
-        model_results[f'{horizon}_RMSE'] = rmse
-        model_results[f'{horizon}_MAPE'] = mape
-        
-        if PRINT_METRICS_PER_HORIZON:
-            print(f"  {horizon}:")
-            print(f"    MAE:  {mae:8.4f}°C")
-            print(f"    RMSE: {rmse:8.4f}°C")
-            print(f"    MAPE: {mape:8.2f}%")
-        
-        # Add R² only for test set
-        if is_test_set:
-            r2 = r2_score(y_true[horizon], y_pred_df[horizon])
-            model_results[f'{horizon}_R2'] = r2
-            if PRINT_METRICS_PER_HORIZON:
-                print(f"    R²:   {r2:8.4f}")
+    except FileNotFoundError as e:
+        print(f"  ✗ Test data not found in '{data_dir}'")
+        print(f"    Error: {e}")
+        return None, None
 
-    # Calculate average metrics across all horizons
-    avg_mae = mean_absolute_error(y_true.values.flatten(), y_pred_df.values.flatten())
-    avg_mse = mean_squared_error(y_true.values.flatten(), y_pred_df.values.flatten())
-    avg_rmse = np.sqrt(avg_mse)
-    avg_mape = np.mean(np.abs((y_true.values.flatten() - y_pred_df.values.flatten()) / y_true.values.flatten())) * 100
+
+def load_trained_model(target_name):
+    """
+    Load trained model for specific target.
     
-    model_results["Average_MAE"] = avg_mae
-    model_results["Average_RMSE"] = avg_rmse
-    model_results["Average_MAPE"] = avg_mape
+    Args:
+        target_name (str): Target name (e.g., 't+1', 't+2')
+    
+    Returns:
+        model: Loaded model or None on error
+    """
+    model_path = os.path.join(MODELS_DIR, f"model_{target_name}.joblib")
+    
+    try:
+        model = joblib.load(model_path)
+        if VERBOSE_EVALUATION:
+            print(f"  ✓ Model loaded from: {model_path}")
+        return model
+    except FileNotFoundError:
+        print(f"  ✗ Model not found: {model_path}")
+        return None
+
+
+def calculate_metrics(y_true, y_pred, target_name):
+    """
+    Calculate evaluation metrics for a single target.
+    
+    Args:
+        y_true (np.array): True values
+        y_pred (np.array): Predicted values
+        target_name (str): Target name for display
+    
+    Returns:
+        dict: Dictionary of metrics
+    """
+    mae = mean_absolute_error(y_true, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+    r2 = r2_score(y_true, y_pred)
+    
+    metrics = {
+        'MAE': mae,
+        'RMSE': rmse,
+        'MAPE': mape,
+        'R2': r2
+    }
     
     print(f"\n{'-'*70}")
-    print(f"Average Across All Horizons:")
-    print(f"  MAE:  {avg_mae:8.4f}°C")
-    print(f"  RMSE: {avg_rmse:8.4f}°C")
-    print(f"  MAPE: {avg_mape:8.2f}%")
+    print(f"Metrics for {target_name}:")
+    print(f"  MAE:  {mae:8.4f}°C")
+    print(f"  RMSE: {rmse:8.4f}°C")
+    print(f"  MAPE: {mape:8.2f}%")
+    print(f"  R²:   {r2:8.4f}")
+    print(f"{'-'*70}")
     
-    # Add average R² only for test set
-    if is_test_set:
-        avg_r2 = r2_score(y_true.values.flatten(), y_pred_df.values.flatten())
-        model_results["Average_R2"] = avg_r2
-        print(f"  R²:   {avg_r2:8.4f}")
-    
-    print(f"{'-'*70}\n")
+    return metrics
 
-    return model_results, y_pred_df
 
-def visualize_results(y_true, all_predictions):
+def evaluate_per_target_models():
     """
-    Create scatter and line plots comparing actual vs predicted values.
-    Can show all horizons or selected horizons based on config.
-    Optionally saves plots to disk.
-
-    Args:
-        y_true (pd.DataFrame): DataFrame with actual values
-        all_predictions (dict): Dictionary {'model_name': y_pred_df}
+    Evaluate all trained models on test set.
+    
+    Returns:
+        dict: Dictionary of results {target_name: {metrics, predictions}}
     """
-    plt.ioff()  # Turn off interactive mode for ClearML integration
+    all_results = {}
     
-    if VERBOSE_EVALUATION:
-        print(f"\n✓ Creating visualizations...")
+    print(f"\n{'='*70}")
+    print(f"EVALUATING PER-TARGET MODELS ON TEST SET")
+    print(f"{'='*70}\n")
     
-    # Determine which horizons to plot
-    if HORIZONS_TO_PLOT is not None:
-        horizons_to_plot = HORIZONS_TO_PLOT
-    elif PLOT_ALL_HORIZONS:
-        horizons_to_plot = TARGET_COLUMNS
-    else:
-        # Default: first and last horizon only
-        horizons_to_plot = [TARGET_COLUMNS[0], TARGET_COLUMNS[-1]]
+    for day_step in range(1, N_STEPS_AHEAD + 1):
+        target_name = f"t+{day_step}"
+        
+        print(f"{'='*70}")
+        print(f"[{target_name}]")
+        print(f"{'='*70}")
+        
+        # Load model
+        model = load_trained_model(target_name)
+        if model is None:
+            print(f"  ✗ Skipping {target_name} - model not found")
+            continue
+        
+        # Load test data
+        X_test, y_test = load_test_data_for_target(day_step)
+        if X_test is None:
+            print(f"  ✗ Skipping {target_name} - test data not found")
+            continue
+        
+        # Make predictions
+        print(f"  Predicting...", end="", flush=True)
+        y_pred = model.predict(X_test)
+        print(f" ✓ Complete")
+        
+        # Calculate metrics
+        metrics = calculate_metrics(y_test, y_pred, target_name)
+        
+        # Store results
+        all_results[target_name] = {
+            'metrics': metrics,
+            'y_true': y_test,
+            'y_pred': y_pred,
+            'n_samples': len(y_test)
+        }
+        
+        print()
     
-    for idx, horizon in enumerate(horizons_to_plot, 1):
-        # ===== Scatter Plot =====
-        fig_scatter = plt.figure(figsize=PLOT_FIGSIZE_SCATTER)
-        
-        for model_name, y_pred_df in all_predictions.items():
-            plt.scatter(y_true[horizon], y_pred_df[horizon], alpha=0.5, label=model_name, s=20)
-        
-        # Perfect prediction reference line
-        min_val = y_true[horizon].min()
-        max_val = y_true[horizon].max()
-        plt.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='Perfect Prediction')
-        
-        plt.title(f'Actual vs Predicted Temperature - {horizon}', fontsize=14, fontweight='bold')
-        plt.xlabel('Actual Temperature (°C)', fontsize=12)
-        plt.ylabel('Predicted Temperature (°C)', fontsize=12)
-        plt.legend(loc='best')
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        
-        # Save scatter plot
-        if SAVE_PLOTS:
-            scatter_filename = f"scatter_{horizon}.{PLOT_FORMAT}"
-            scatter_path = os.path.join(PLOTS_DIR, scatter_filename)
-            plt.savefig(scatter_path, dpi=PLOT_DPI, format=PLOT_FORMAT, bbox_inches='tight')
-            if VERBOSE_EVALUATION:
-                print(f"  ✓ Scatter plot saved: {scatter_path}")
-        else:
-            if VERBOSE_EVALUATION:
-                print(f"  • Scatter plot: {horizon}")
-        
-        plt.close(fig_scatter)
-        
-        # ===== Time Series Line Plot =====
-        fig_ts = plt.figure(figsize=PLOT_FIGSIZE_TIMESERIES)
-        
-        # Plot actual values
-        plt.plot(y_true.index, y_true[horizon], 
-                label=f'Actual ({horizon})', 
-                color='black', linewidth=1, marker='o', markersize=3)
-        
-        # Plot predictions from each model
-        for model_name, y_pred_df in all_predictions.items():
-            plt.plot(y_pred_df.index, y_pred_df[horizon], 
-                    label=f'Predicted ({model_name})', 
-                    linestyle='--', linewidth=1.5, alpha=0.8, marker='.')
-        
-        plt.title(f'Temperature Forecasting Over Time - {horizon}', fontsize=14, fontweight='bold')
-        plt.xlabel('Date', fontsize=12)
-        plt.ylabel('Temperature (°C)', fontsize=12)
-        plt.legend(loc='best')
-        plt.grid(True, alpha=0.3)
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-        
-        # Save time series plot
-        if SAVE_PLOTS:
-            ts_filename = f"timeseries_{horizon}.{PLOT_FORMAT}"
-            ts_path = os.path.join(PLOTS_DIR, ts_filename)
-            plt.savefig(ts_path, dpi=PLOT_DPI, format=PLOT_FORMAT, bbox_inches='tight')
-            if VERBOSE_EVALUATION:
-                print(f"  ✓ Time series plot saved: {ts_path}")
-        else:
-            if VERBOSE_EVALUATION:
-                print(f"  • Time series plot: {horizon}")
-        
-        plt.close(fig_ts)
-    
-    if SAVE_PLOTS and VERBOSE_EVALUATION:
-        print(f"\n✓ All plots saved to '{PLOTS_DIR}/' directory")
+    return all_results
 
-def save_results_summary(results, output_filename=RESULTS_FILENAME, is_test_set=False):
-    """
-    Consolidate results from dictionary and save to CSV.
 
-    Args:
-        results (dict): Nested dictionary, e.g., {'Model 1': {'MAE': 1.0, 'RMSE': 2.0}}
-        output_filename (str): Output CSV filename
-        is_test_set (bool): If True, include R² columns
-    """
-    if not SAVE_RESULTS:
+def print_summary(all_results):
+    """Print evaluation summary across all targets."""
+    if not all_results:
+        print("No results to summarize.")
         return
     
-    if VERBOSE_EVALUATION:
-        print(f"\n✓ Summarizing Results:")
+    print(f"\n{'='*70}")
+    print(f"EVALUATION SUMMARY")
+    print(f"{'='*70}\n")
     
-    result_df = pd.DataFrame(results).T
+    # Create summary table
+    print(f"{'Target':<10} {'MAE':<10} {'RMSE':<10} {'MAPE':<10} {'R²':<10}")
+    print(f"{'-'*70}")
     
-    # Order columns for readability
-    cols_ordered = []
-    for h in TARGET_COLUMNS:
-        cols_ordered.append(f'{h}_MAE')
-        cols_ordered.append(f'{h}_RMSE')
-        cols_ordered.append(f'{h}_MAPE')
-        if is_test_set:
-            cols_ordered.append(f'{h}_R2')
+    total_mae = 0
+    total_rmse = 0
+    total_mape = 0
+    total_r2 = 0
     
-    cols_ordered.extend(['Average_MAE', 'Average_RMSE', 'Average_MAPE'])
-    if is_test_set:
-        cols_ordered.append('Average_R2')
+    for target_name, results in all_results.items():
+        metrics = results['metrics']
+        print(f"{target_name:<10} {metrics['MAE']:<10.4f} {metrics['RMSE']:<10.4f} "
+              f"{metrics['MAPE']:<10.2f} {metrics['R2']:<10.4f}")
+        
+        total_mae += metrics['MAE']
+        total_rmse += metrics['RMSE']
+        total_mape += metrics['MAPE']
+        total_r2 += metrics['R2']
     
-    final_cols = [c for c in cols_ordered if c in result_df.columns]
+    n_targets = len(all_results)
+    avg_mae = total_mae / n_targets
+    avg_rmse = total_rmse / n_targets
+    avg_mape = total_mape / n_targets
+    avg_r2 = total_r2 / n_targets
     
-    print(result_df[final_cols].round(4).to_string())
+    print(f"{'-'*70}")
+    print(f"{'Average':<10} {avg_mae:<10.4f} {avg_rmse:<10.4f} "
+          f"{avg_mape:<10.2f} {avg_r2:<10.4f}")
+    print(f"{'='*70}\n")
+
+
+def save_results(all_results):
+    """Save evaluation results to JSON and CSV files."""
+    if not all_results:
+        return
     
-    # Save to file
-    output_path = os.path.join(RESULTS_DIR, output_filename)
-    result_df[final_cols].round(4).to_csv(output_path)
+    # Prepare results for JSON (convert numpy arrays to lists)
+    json_results = {}
+    for target_name, results in all_results.items():
+        json_results[target_name] = {
+            'metrics': results['metrics'],
+            'n_samples': results['n_samples']
+        }
     
-    if VERBOSE_EVALUATION:
-        print(f"\n✓ Results saved to '{output_path}'")
+    # Save to JSON
+    results_json_path = os.path.join(PROJECT_ROOT, 'evaluation_results.json')
+    with open(results_json_path, 'w') as f:
+        json.dump(json_results, f, indent=2)
+    print(f"✓ Results saved to: {results_json_path}")
+    
+    # Save metrics to CSV
+    metrics_data = []
+    for target_name, results in all_results.items():
+        row = {'target': target_name}
+        row.update(results['metrics'])
+        row['n_samples'] = results['n_samples']
+        metrics_data.append(row)
+    
+    metrics_df = pd.DataFrame(metrics_data)
+    metrics_csv_path = os.path.join(PROJECT_ROOT, 'evaluation_metrics.csv')
+    metrics_df.to_csv(metrics_csv_path, index=False)
+    print(f"✓ Metrics saved to: {metrics_csv_path}")
+
+
+def create_visualizations(all_results):
+    """Create scatter plots and time series comparisons."""
+    if not all_results:
+        return
+    
+    os.makedirs(PLOTS_DIR, exist_ok=True)
+    
+    print(f"\n{'='*70}")
+    print(f"CREATING VISUALIZATIONS")
+    print(f"{'='*70}\n")
+    
+    # Scatter plot for each target
+    print("Creating scatter plots...")
+    for target_name, results in all_results.items():
+        y_true = results['y_true']
+        y_pred = results['y_pred']
+        metrics = results['metrics']
+        
+        plt.figure(figsize=(10, 8))
+        plt.scatter(y_true, y_pred, alpha=0.5, s=30)
+        
+        # Perfect prediction line
+        min_val = y_true.min()
+        max_val = y_true.max()
+        plt.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='Perfect Prediction')
+        
+        plt.title(f'{target_name} - Actual vs Predicted Temperature\n'
+                  f'RMSE={metrics["RMSE"]:.4f}°C, R²={metrics["R2"]:.4f}',
+                  fontsize=12, fontweight='bold')
+        plt.xlabel('Actual Temperature (°C)', fontsize=11)
+        plt.ylabel('Predicted Temperature (°C)', fontsize=11)
+        plt.legend(loc='best')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        if SAVE_PLOTS:
+            plot_path = os.path.join(PLOTS_DIR, f'scatter_{target_name}.{PLOT_FORMAT}')
+            plt.savefig(plot_path, dpi=PLOT_DPI, format=PLOT_FORMAT, bbox_inches='tight')
+            print(f"  ✓ Scatter {target_name}: {plot_path}")
+        
+        plt.close()
+    
+    # Combined scatter plot
+    plt.figure(figsize=(14, 10))
+    for target_name, results in all_results.items():
+        plt.scatter(results['y_true'], results['y_pred'], 
+                   alpha=0.4, s=20, label=target_name)
+    
+    # Perfect prediction line
+    all_true = np.concatenate([r['y_true'] for r in all_results.values()])
+    min_val = all_true.min()
+    max_val = all_true.max()
+    plt.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='Perfect Prediction')
+    
+    plt.title('All Targets - Actual vs Predicted Temperature', fontsize=14, fontweight='bold')
+    plt.xlabel('Actual Temperature (°C)', fontsize=12)
+    plt.ylabel('Predicted Temperature (°C)', fontsize=12)
+    plt.legend(loc='best')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    if SAVE_PLOTS:
+        combined_path = os.path.join(PLOTS_DIR, f'scatter_all_targets.{PLOT_FORMAT}')
+        plt.savefig(combined_path, dpi=PLOT_DPI, format=PLOT_FORMAT, bbox_inches='tight')
+        print(f"  ✓ Scatter combined: {combined_path}")
+    
+    plt.close()
+    
+    # Time series plots for each target
+    print("\nCreating time series plots...")
+    create_timeseries_plots(all_results)
+    
+    print(f"{'='*70}\n")
+
+
+def create_timeseries_plots(all_results):
+    """Create time series comparison plots for actual vs predicted values."""
+    
+    # Individual time series for each target
+    for target_name, results in all_results.items():
+        y_true = results['y_true']
+        y_pred = results['y_pred']
+        metrics = results['metrics']
+        
+        # Get indices for x-axis (sample numbers)
+        indices = np.arange(len(y_true))
+        
+        # Plot full time series
+        plt.figure(figsize=(16, 6))
+        plt.plot(indices, y_true, 'b-', linewidth=1.5, alpha=0.7, label='Actual')
+        plt.plot(indices, y_pred, 'r-', linewidth=1.5, alpha=0.7, label='Predicted')
+        
+        plt.title(f'{target_name} - Time Series Comparison\n'
+                  f'RMSE={metrics["RMSE"]:.4f}°C, MAE={metrics["MAE"]:.4f}°C',
+                  fontsize=13, fontweight='bold')
+        plt.xlabel('Sample Index', fontsize=11)
+        plt.ylabel('Temperature (°C)', fontsize=11)
+        plt.legend(loc='best')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        if SAVE_PLOTS:
+            ts_path = os.path.join(PLOTS_DIR, f'timeseries_{target_name}.{PLOT_FORMAT}')
+            plt.savefig(ts_path, dpi=PLOT_DPI, format=PLOT_FORMAT, bbox_inches='tight')
+            print(f"  ✓ Time series {target_name}: {ts_path}")
+        
+        plt.close()
+        
+        # Plot zoomed-in view (first 200 samples)
+        n_samples = min(200, len(y_true))
+        
+        plt.figure(figsize=(16, 6))
+        plt.plot(indices[:n_samples], y_true[:n_samples], 'b-', linewidth=2, alpha=0.7, label='Actual', marker='o', markersize=3)
+        plt.plot(indices[:n_samples], y_pred[:n_samples], 'r-', linewidth=2, alpha=0.7, label='Predicted', marker='s', markersize=3)
+        
+        plt.title(f'{target_name} - Time Series Comparison (First {n_samples} Samples)\n'
+                  f'RMSE={metrics["RMSE"]:.4f}°C, MAE={metrics["MAE"]:.4f}°C',
+                  fontsize=13, fontweight='bold')
+        plt.xlabel('Sample Index', fontsize=11)
+        plt.ylabel('Temperature (°C)', fontsize=11)
+        plt.legend(loc='best')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        if SAVE_PLOTS:
+            ts_zoom_path = os.path.join(PLOTS_DIR, f'timeseries_{target_name}_zoom.{PLOT_FORMAT}')
+            plt.savefig(ts_zoom_path, dpi=PLOT_DPI, format=PLOT_FORMAT, bbox_inches='tight')
+            print(f"  ✓ Time series zoom {target_name}: {ts_zoom_path}")
+        
+        plt.close()
+    
+    # Combined time series plot (all targets on one chart)
+    n_samples = min(200, len(list(all_results.values())[0]['y_true']))
+    
+    fig, axes = plt.subplots(N_STEPS_AHEAD, 1, figsize=(16, 3*N_STEPS_AHEAD))
+    if N_STEPS_AHEAD == 1:
+        axes = [axes]
+    
+    for idx, (target_name, results) in enumerate(all_results.items()):
+        y_true = results['y_true'][:n_samples]
+        y_pred = results['y_pred'][:n_samples]
+        metrics = results['metrics']
+        indices = np.arange(len(y_true))
+        
+        ax = axes[idx]
+        ax.plot(indices, y_true, 'b-', linewidth=1.5, alpha=0.7, label='Actual', marker='o', markersize=2)
+        ax.plot(indices, y_pred, 'r-', linewidth=1.5, alpha=0.7, label='Predicted', marker='s', markersize=2)
+        
+        ax.set_title(f'{target_name} - RMSE={metrics["RMSE"]:.4f}°C, MAE={metrics["MAE"]:.4f}°C',
+                     fontsize=11, fontweight='bold')
+        ax.set_xlabel('Sample Index', fontsize=10)
+        ax.set_ylabel('Temp (°C)', fontsize=10)
+        ax.legend(loc='best', fontsize=9)
+        ax.grid(True, alpha=0.3)
+    
+    plt.suptitle(f'All Targets - Time Series Comparison (First {n_samples} Samples)',
+                 fontsize=14, fontweight='bold', y=0.995)
+    plt.tight_layout()
+    
+    if SAVE_PLOTS:
+        combined_ts_path = os.path.join(PLOTS_DIR, f'timeseries_all_targets.{PLOT_FORMAT}')
+        plt.savefig(combined_ts_path, dpi=PLOT_DPI, format=PLOT_FORMAT, bbox_inches='tight')
+        print(f"  ✓ Time series combined: {combined_ts_path}")
+    
+    plt.close()
+
 
 if __name__ == "__main__":
-    # Example usage (assuming data loading functions are defined elsewhere)
-    X_test, y_test = load_data('test')
+    print("\n" + "="*70)
+    print("PER-TARGET MODEL EVALUATION")
+    print("="*70 + "\n")
     
-    trained_models = load_trained_models()  # Placeholder function to load models
-    all_model_predictions = {}
-    all_model_results = {}
+    # Evaluate all models
+    all_results = evaluate_per_target_models()
     
-    # Example model evaluation loop
-    for model_name, model in trained_models.items():
-        y_test_pred = model.predict(X_test)
-        test_results, y_test_pred_df = calculate_metrics(y_test, y_test_pred, model_name=model_name, is_test_set=True)
-        all_model_results[f"{model_name}_Test"] = test_results
-        all_model_predictions[f"{model_name}_Test"] = y_test_pred_df
-    
-    visualize_results(y_test, all_model_predictions)
-    save_results_summary(all_model_results, output_filename=RESULTS_FILENAME, is_test_set=True)
+    if all_results:
+        # Print summary
+        print_summary(all_results)
+        
+        # Save results
+        save_results(all_results)
+        
+        # Create visualizations
+        create_visualizations(all_results)
+        
+        print("✅ Evaluation complete!")
+    else:
+        print("❌ No models were evaluated successfully.")
