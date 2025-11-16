@@ -117,7 +117,6 @@ def objective_stage1(trial, X_train, y_train, X_dev, y_dev):
             "subsample": trial.suggest_categorical("lgbm_subsample", [0.7, 0.85, 1.0]),
             "n_jobs": -1,
             "random_state": RANDOM_STATE,
-            "verbose": -1,
         }
         model = lgb.LGBMRegressor(**params)
     
@@ -127,8 +126,7 @@ def objective_stage1(trial, X_train, y_train, X_dev, y_dev):
             "depth": trial.suggest_categorical("cat_depth", [4, 6, 8]),
             "learning_rate": trial.suggest_categorical("cat_learning_rate", [0.01, 0.05, 0.1]),
             "l2_leaf_reg": trial.suggest_categorical("cat_l2_leaf_reg", [1.0, 3.0, 5.0]),
-            "task_type": "GPU" if str(DEVICE) == "cuda" else "CPU",
-            "verbose": 0,
+            "task_type": "CPU",
             "random_state": RANDOM_STATE,
         }
         model = CatBoostRegressor(**params)
