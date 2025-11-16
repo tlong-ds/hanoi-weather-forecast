@@ -84,29 +84,28 @@ class ClearMLModelDeployer:
         if not self.task:
             self.initialize_task()
         
-        # Create model object
-        model = Model(
-            task=self.task,
-            name=model_name,
+        # Upload model file using OutputModel
+        output_model = self.task.create_output_model(
+            model_name=model_name,
             tags=tags or [],
             comment=comment or f"Weather forecast model: {model_name}"
         )
         
-        # Upload model file
-        model.update_weights(
+        # Upload the model weights
+        output_model.update_weights(
             weights_filename=model_path,
             auto_delete_file=False
         )
         
         # Add metadata
         if metadata:
-            model.update_design(config_dict=metadata)
+            output_model.update_design(config_dict=metadata)
         
         print(f"✅ Model registered: {model_name}")
-        print(f"   Model ID: {model.id}")
+        print(f"   Model ID: {output_model.id}")
         print(f"   Tags: {tags}")
         
-        return model
+        return output_model
     
     def deploy_all_models(
         self,
