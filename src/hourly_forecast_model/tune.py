@@ -58,10 +58,11 @@ def objective_random_forest(trial, X_train, y_train, X_dev, y_dev):
                      for i in range(y_dev.shape[1])]
     avg_rmse = np.mean(rmse_per_hour)
     
-    # Log to ClearML
-    logger.report_scalar("RandomForest_RMSE", "avg", avg_rmse, trial.number)
+    # Log to ClearML with proper iteration
+    iteration = trial.number
+    logger.report_scalar(title="RandomForest_RMSE", series="avg", value=avg_rmse, iteration=iteration)
     for i, rmse in enumerate(rmse_per_hour, 1):
-        logger.report_scalar("RandomForest_RMSE", f"t+{i}h", rmse, trial.number)
+        logger.report_scalar(title="RandomForest_RMSE", series=f"t+{i}h", value=rmse, iteration=iteration)
     
     return avg_rmse
 
@@ -89,10 +90,11 @@ def objective_xgboost(trial, X_train, y_train, X_dev, y_dev):
                      for i in range(y_dev.shape[1])]
     avg_rmse = np.mean(rmse_per_hour)
     
-    # Log to ClearML
-    logger.report_scalar("XGBoost_RMSE", "avg", avg_rmse, trial.number)
+    # Log to ClearML with proper iteration
+    iteration = trial.number
+    logger.report_scalar(title="XGBoost_RMSE", series="avg", value=avg_rmse, iteration=iteration)
     for i, rmse in enumerate(rmse_per_hour, 1):
-        logger.report_scalar("XGBoost_RMSE", f"t+{i}h", rmse, trial.number)
+        logger.report_scalar(title="XGBoost_RMSE", series=f"t+{i}h", value=rmse, iteration=iteration)
     
     return avg_rmse
 
@@ -122,10 +124,11 @@ def objective_lightgbm(trial, X_train, y_train, X_dev, y_dev):
                      for i in range(y_dev.shape[1])]
     avg_rmse = np.mean(rmse_per_hour)
     
-    # Log to ClearML
-    logger.report_scalar("LightGBM_RMSE", "avg", avg_rmse, trial.number)
+    # Log to ClearML with proper iteration
+    iteration = trial.number
+    logger.report_scalar(title="LightGBM_RMSE", series="avg", value=avg_rmse, iteration=iteration)
     for i, rmse in enumerate(rmse_per_hour, 1):
-        logger.report_scalar("LightGBM_RMSE", f"t+{i}h", rmse, trial.number)
+        logger.report_scalar(title="LightGBM_RMSE", series=f"t+{i}h", value=rmse, iteration=iteration)
     
     return avg_rmse
 
@@ -151,10 +154,11 @@ def objective_catboost(trial, X_train, y_train, X_dev, y_dev):
                      for i in range(y_dev.shape[1])]
     avg_rmse = np.mean(rmse_per_hour)
     
-    # Log to ClearML
-    logger.report_scalar("CatBoost_RMSE", "avg", avg_rmse, trial.number)
+    # Log to ClearML with proper iteration
+    iteration = trial.number
+    logger.report_scalar(title="CatBoost_RMSE", series="avg", value=avg_rmse, iteration=iteration)
     for i, rmse in enumerate(rmse_per_hour, 1):
-        logger.report_scalar("CatBoost_RMSE", f"t+{i}h", rmse, trial.number)
+        logger.report_scalar(title="CatBoost_RMSE", series=f"t+{i}h", value=rmse, iteration=iteration)
     
     return avg_rmse
 
@@ -218,8 +222,8 @@ def tune_model(model_name, X_train, y_train, X_dev, y_dev, n_trials=N_TRIALS):
     print(f"{'='*70}\n")
     
     # Log best result to ClearML
-    logger.report_scalar("Best_Model_RMSE", model_name, best_rmse, 0)
-    logger.report_text(f"{model_name} Best RMSE: {best_rmse:.4f}°C", level="INFO")
+    logger.report_scalar(title="Best_Model_RMSE", series=model_name, value=best_rmse, iteration=0)
+    logger.report_text(f"{model_name} Best RMSE: {best_rmse:.4f}°C")
     
     return {
         'model': model_name,
@@ -271,8 +275,8 @@ def main():
     print(f"{'='*70}\n")
     
     # Log final summary to ClearML
-    logger.report_text(f"Best Overall Model: {best_model[0]} (RMSE: {best_model[1]['best_rmse']:.4f}°C)", level="INFO")
-    logger.report_scalar("Final_Best_RMSE", "Winner", best_model[1]['best_rmse'], 0)
+    logger.report_text(f"Best Overall Model: {best_model[0]} (RMSE: {best_model[1]['best_rmse']:.4f}°C)")
+    logger.report_scalar(title="Final_Best_RMSE", series="Winner", value=best_model[1]['best_rmse'], iteration=0)
     
     # Save results
     results_dir = os.path.join(PROJECT_ROOT, 'src', 'hourly_forecast_model', 'final')
