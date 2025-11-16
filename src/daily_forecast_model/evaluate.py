@@ -21,6 +21,9 @@ from src.daily_forecast_model.helper import (
     SAVE_PLOTS, PLOT_FORMAT, PLOT_DPI, VERBOSE_EVALUATION
 )
 
+# Evaluation results directory
+EVALUATE_RESULTS_DIR = os.path.join(PROJECT_ROOT, 'src', 'daily_forecast_model', 'evaluate_results')
+
 
 def load_test_data_for_target(day_step):
     """
@@ -209,6 +212,9 @@ def save_results(all_results):
     if not all_results:
         return
     
+    # Create evaluate_results directory if it doesn't exist
+    os.makedirs(EVALUATE_RESULTS_DIR, exist_ok=True)
+    
     # Prepare results for JSON (convert numpy arrays to lists)
     json_results = {}
     for target_name, results in all_results.items():
@@ -218,7 +224,7 @@ def save_results(all_results):
         }
     
     # Save to JSON
-    results_json_path = os.path.join(PROJECT_ROOT, 'evaluation_results.json')
+    results_json_path = os.path.join(EVALUATE_RESULTS_DIR, 'evaluation_results.json')
     with open(results_json_path, 'w') as f:
         json.dump(json_results, f, indent=2)
     print(f"✓ Results saved to: {results_json_path}")
@@ -232,7 +238,7 @@ def save_results(all_results):
         metrics_data.append(row)
     
     metrics_df = pd.DataFrame(metrics_data)
-    metrics_csv_path = os.path.join(PROJECT_ROOT, 'evaluation_metrics.csv')
+    metrics_csv_path = os.path.join(EVALUATE_RESULTS_DIR, 'evaluation_metrics.csv')
     metrics_df.to_csv(metrics_csv_path, index=False)
     print(f"✓ Metrics saved to: {metrics_csv_path}")
 
@@ -242,7 +248,9 @@ def create_visualizations(all_results):
     if not all_results:
         return
     
-    os.makedirs(PLOTS_DIR, exist_ok=True)
+    # Create plots directory inside evaluate_results
+    plots_dir = os.path.join(EVALUATE_RESULTS_DIR, 'plots')
+    os.makedirs(plots_dir, exist_ok=True)
     
     print(f"\n{'='*70}")
     print(f"CREATING VISUALIZATIONS")
@@ -273,7 +281,7 @@ def create_visualizations(all_results):
         plt.tight_layout()
         
         if SAVE_PLOTS:
-            plot_path = os.path.join(PLOTS_DIR, f'scatter_{target_name}.{PLOT_FORMAT}')
+            plot_path = os.path.join(plots_dir, f'scatter_{target_name}.{PLOT_FORMAT}')
             plt.savefig(plot_path, dpi=PLOT_DPI, format=PLOT_FORMAT, bbox_inches='tight')
             print(f"  ✓ Scatter {target_name}: {plot_path}")
         
@@ -299,7 +307,7 @@ def create_visualizations(all_results):
     plt.tight_layout()
     
     if SAVE_PLOTS:
-        combined_path = os.path.join(PLOTS_DIR, f'scatter_all_targets.{PLOT_FORMAT}')
+        combined_path = os.path.join(plots_dir, f'scatter_all_targets.{PLOT_FORMAT}')
         plt.savefig(combined_path, dpi=PLOT_DPI, format=PLOT_FORMAT, bbox_inches='tight')
         print(f"  ✓ Scatter combined: {combined_path}")
     
@@ -314,6 +322,10 @@ def create_visualizations(all_results):
 
 def create_timeseries_plots(all_results):
     """Create time series comparison plots for actual vs predicted values."""
+    
+    # Create plots directory inside evaluate_results
+    plots_dir = os.path.join(EVALUATE_RESULTS_DIR, 'plots')
+    os.makedirs(plots_dir, exist_ok=True)
     
     # Individual time series for each target
     for target_name, results in all_results.items():
@@ -339,7 +351,7 @@ def create_timeseries_plots(all_results):
         plt.tight_layout()
         
         if SAVE_PLOTS:
-            ts_path = os.path.join(PLOTS_DIR, f'timeseries_{target_name}.{PLOT_FORMAT}')
+            ts_path = os.path.join(plots_dir, f'timeseries_{target_name}.{PLOT_FORMAT}')
             plt.savefig(ts_path, dpi=PLOT_DPI, format=PLOT_FORMAT, bbox_inches='tight')
             print(f"  ✓ Time series {target_name}: {ts_path}")
         
@@ -362,7 +374,7 @@ def create_timeseries_plots(all_results):
         plt.tight_layout()
         
         if SAVE_PLOTS:
-            ts_zoom_path = os.path.join(PLOTS_DIR, f'timeseries_{target_name}_zoom.{PLOT_FORMAT}')
+            ts_zoom_path = os.path.join(plots_dir, f'timeseries_{target_name}_zoom.{PLOT_FORMAT}')
             plt.savefig(ts_zoom_path, dpi=PLOT_DPI, format=PLOT_FORMAT, bbox_inches='tight')
             print(f"  ✓ Time series zoom {target_name}: {ts_zoom_path}")
         
@@ -397,7 +409,7 @@ def create_timeseries_plots(all_results):
     plt.tight_layout()
     
     if SAVE_PLOTS:
-        combined_ts_path = os.path.join(PLOTS_DIR, f'timeseries_all_targets.{PLOT_FORMAT}')
+        combined_ts_path = os.path.join(plots_dir, f'timeseries_all_targets.{PLOT_FORMAT}')
         plt.savefig(combined_ts_path, dpi=PLOT_DPI, format=PLOT_FORMAT, bbox_inches='tight')
         print(f"  ✓ Time series combined: {combined_ts_path}")
     
