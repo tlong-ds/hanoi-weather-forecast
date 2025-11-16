@@ -90,11 +90,12 @@ def objective_stage1(trial, X_train, y_train, X_dev, y_dev):
     )
 
     # Use CATEGORICAL hyperparameters for faster exploration
+    # Use model-specific parameter names to avoid Optuna conflicts
     if model_name == "RandomForest":
         params = {
-            "n_estimators": trial.suggest_categorical("n_estimators", [100, 200, 300]),
-            "max_depth": trial.suggest_categorical("max_depth", [8, 12, 16]),
-            "min_samples_split": trial.suggest_categorical("min_samples_split", [2, 5, 10]),
+            "n_estimators": trial.suggest_categorical("rf_n_estimators", [100, 200, 300]),
+            "max_depth": trial.suggest_categorical("rf_max_depth", [8, 12, 16]),
+            "min_samples_split": trial.suggest_categorical("rf_min_samples_split", [2, 5, 10]),
             "random_state": 42,
             "n_jobs": -1,
         }
@@ -102,10 +103,10 @@ def objective_stage1(trial, X_train, y_train, X_dev, y_dev):
 
     elif model_name == "XGBoost":
         params = {
-            "n_estimators": trial.suggest_categorical("n_estimators", [300, 500, 700]),
-            "max_depth": trial.suggest_categorical("max_depth", [4, 6, 8]),
-            "learning_rate": trial.suggest_categorical("learning_rate", [0.01, 0.05, 0.1]),
-            "subsample": trial.suggest_categorical("subsample", [0.7, 0.85, 1.0]),
+            "n_estimators": trial.suggest_categorical("xgb_n_estimators", [300, 500, 700]),
+            "max_depth": trial.suggest_categorical("xgb_max_depth", [4, 6, 8]),
+            "learning_rate": trial.suggest_categorical("xgb_learning_rate", [0.01, 0.05, 0.1]),
+            "subsample": trial.suggest_categorical("xgb_subsample", [0.7, 0.85, 1.0]),
             "tree_method": "hist",
             "device": "cuda" if str(DEVICE) == "cuda" else "cpu",
             "random_state": 42,
@@ -114,11 +115,11 @@ def objective_stage1(trial, X_train, y_train, X_dev, y_dev):
 
     elif model_name == "LightGBM":
         params = {
-            "n_estimators": trial.suggest_categorical("n_estimators", [300, 500, 700]),
-            "num_leaves": trial.suggest_categorical("num_leaves", [31, 50, 70]),
-            "max_depth": trial.suggest_categorical("max_depth", [6, 9, 12]),
-            "learning_rate": trial.suggest_categorical("learning_rate", [0.01, 0.05, 0.1]),
-            "subsample": trial.suggest_categorical("subsample", [0.7, 0.85, 1.0]),
+            "n_estimators": trial.suggest_categorical("lgbm_n_estimators", [300, 500, 700]),
+            "num_leaves": trial.suggest_categorical("lgbm_num_leaves", [31, 50, 70]),
+            "max_depth": trial.suggest_categorical("lgbm_max_depth", [6, 9, 12]),
+            "learning_rate": trial.suggest_categorical("lgbm_learning_rate", [0.01, 0.05, 0.1]),
+            "subsample": trial.suggest_categorical("lgbm_subsample", [0.7, 0.85, 1.0]),
             "device_type": "cpu",
             "n_jobs": -1,
             "random_state": 42,
@@ -127,10 +128,10 @@ def objective_stage1(trial, X_train, y_train, X_dev, y_dev):
 
     elif model_name == "CatBoost":
         params = {
-            "iterations": trial.suggest_categorical("iterations", [300, 500, 700]),
-            "depth": trial.suggest_categorical("depth", [4, 6, 8]),
-            "learning_rate": trial.suggest_categorical("learning_rate", [0.01, 0.05, 0.1]),
-            "l2_leaf_reg": trial.suggest_categorical("l2_leaf_reg", [1.0, 3.0, 5.0]),
+            "iterations": trial.suggest_categorical("cat_iterations", [300, 500, 700]),
+            "depth": trial.suggest_categorical("cat_depth", [4, 6, 8]),
+            "learning_rate": trial.suggest_categorical("cat_learning_rate", [0.01, 0.05, 0.1]),
+            "l2_leaf_reg": trial.suggest_categorical("cat_l2_leaf_reg", [1.0, 3.0, 5.0]),
             "task_type": "GPU" if str(DEVICE) == "cuda" else "CPU",
             "verbose": 0,
             "random_state": 42,
