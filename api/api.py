@@ -95,7 +95,8 @@ async def startup_event():
                 project_name="Hanoi Weather Forecast",
                 task_name="Production API - Inference Monitoring",
                 task_type="inference",
-                reuse_last_task_id=True  # Reuse same task for continuous monitoring
+                reuse_last_task_id=True,  # Reuse same task for continuous monitoring
+                auto_resource_monitoring=False  # Disable GPU/resource monitoring for CPU-only deployment
             )
             clearml_logger = clearml_task.get_logger()
             print("✅ ClearML monitoring enabled")
