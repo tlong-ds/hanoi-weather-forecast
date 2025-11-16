@@ -1,10 +1,3 @@
-"""
-Production inference module for weather forecasting.
-
-This module provides a simple interface for making 5-day temperature predictions
-using trained per-target models. Designed for web deployment and real-time inference.
-"""
-
 import pandas as pd
 import numpy as np
 import os

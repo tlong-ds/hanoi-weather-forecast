@@ -1,12 +1,3 @@
-"""
-Evaluation module for per-target weather forecasting models.
-
-This module evaluates trained models on the test set and generates:
-- Per-target metrics (MAE, RMSE, MAPE, R²)
-- Visualizations (scatter plots, time series comparisons)
-- Comprehensive evaluation reports
-"""
-
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
