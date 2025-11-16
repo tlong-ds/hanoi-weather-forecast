@@ -1,4 +1,5 @@
 import streamlit as st
+import base64
 st.set_page_config(layout="wide", page_title="Weather Forecast", page_icon="🌤️")
 
 import pandas as pd
@@ -246,16 +247,6 @@ st.markdown("""
 # ========================================
 st.sidebar.title("⚙️ Settings")
 
-# 🌍 Global Location List
-locations = [
-    "Hanoi, Vietnam", "Ho Chi Minh City, Vietnam", "Bangkok, Thailand", "Singapore, Singapore",
-    "Tokyo, Japan", "Seoul, South Korea", "Beijing, China", "Shanghai, China", 
-    "New York, USA", "Los Angeles, USA", "London, UK", "Paris, France", "Berlin, Germany",
-    "Sydney, Australia", "Melbourne, Australia", "Toronto, Canada", "Vancouver, Canada",
-    "Dubai, UAE", "Mumbai, India", "Jakarta, Indonesia"
-]
-
-selected_location = st.sidebar.selectbox("🌍 Choose Location", locations, index=0)
 
 # 🗓 Date Picker (Simplified)
 if weather_df is not None and len(weather_df) > 0:
@@ -404,37 +395,13 @@ with left_col:
     st.components.v1.html(html, height=140, scrolling=False)
 
 
-    # 🧭 Weekly Forecast Chart
-    st.markdown('<h3 style="margin-top: 30px;">📈 Weekly Temperature Trend</h3>', unsafe_allow_html=True)
-    selected_ts = pd.to_datetime(selected_date)
-    weekly_df = weather_df.loc[weather_df.index >= selected_ts].head(7)
+    # 5-Day Forecast
+    st.markdown('<h3 style="color: #ffffff; font-size: 30px; margin: 30px 0 15px 0;">📅 5-Day Forecast</h3>', unsafe_allow_html=True)
+    forecast_days = weather_df.loc[weather_df.index >= selected_ts].head(5) 
 
-    fig, ax = plt.subplots(figsize=(12, 4))
-    fig.patch.set_facecolor('#1a2332')
-    ax.set_facecolor('#1a2332')
 
-    ax.plot(weekly_df.index, weekly_df['tempmax'], label="Max Temp", linewidth=3, marker='o')
-    ax.plot(weekly_df.index, weekly_df['tempmin'], label="Min Temp", linewidth=3, marker='o', linestyle="--")
-    ax.fill_between(weekly_df.index, weekly_df['tempmin'], weekly_df['tempmax'], alpha=0.2)
 
-    ax.set_title("7-Day Temperature Range", color="#e0e7ff")
-    ax.set_ylabel("Temperature (°C)", color="#94a3b8")
-    ax.tick_params(axis='x', colors='#94a3b8', rotation=15)
-    ax.tick_params(axis='y', colors='#94a3b8')
-    ax.legend(facecolor="#1a2332", labelcolor="#e0e7ff")
-    for spine in ax.spines.values():
-        spine.set_color('#2a3f5f')
-    st.pyplot(fig)
-    plt.close()
-
-    
-    
-    # 7-Day Forecast
-    st.markdown('<h3 style="color: #ffffff; font-size: 20px; margin: 30px 0 15px 0;">📅 7-Day Forecast</h3>', unsafe_allow_html=True)
-    forecast_days = weather_df.loc[weather_df.index >= selected_ts].head(7)
-
-    
-    cols = st.columns(min(7, len(forecast_days)))
+    cols = st.columns(min(5, len(forecast_days)))
     for i, (idx, row) in enumerate(forecast_days.iterrows()):
         if i < len(cols):
             with cols[i]:
@@ -461,6 +428,33 @@ with left_col:
                         </div>
                     </div>
                 """, unsafe_allow_html=True)
+
+
+    # 🧭 Weekly Forecast Chart
+    st.markdown('<h3 style="color: #ffffff; font-size: 30px; margin: 30px 0 15px 0;">📈 Weekly Temperature Trend</h3>', unsafe_allow_html=True)
+    selected_ts = pd.to_datetime(selected_date)
+    weekly_df = weather_df.loc[weather_df.index >= selected_ts].head(7)
+
+    fig, ax = plt.subplots(figsize=(12, 4))
+    fig.patch.set_facecolor('#1a2332')
+    ax.set_facecolor('#1a2332')
+
+    ax.plot(weekly_df.index, weekly_df['tempmax'], label="Max Temp", linewidth=3, marker='o')
+    ax.plot(weekly_df.index, weekly_df['tempmin'], label="Min Temp", linewidth=3, marker='o', linestyle="--")
+    ax.fill_between(weekly_df.index, weekly_df['tempmin'], weekly_df['tempmax'], alpha=0.2)
+
+    ax.set_title("7-Day Temperature Range", color="#e0e7ff")
+    ax.set_ylabel("Temperature (°C)", color="#94a3b8")
+    ax.tick_params(axis='x', colors='#94a3b8', rotation=15)
+    ax.tick_params(axis='y', colors='#94a3b8')
+    ax.legend(facecolor="#1a2332", labelcolor="#e0e7ff")
+    for spine in ax.spines.values():
+        spine.set_color('#2a3f5f')
+    st.pyplot(fig)
+    plt.close()
+
+    
+    
 
 # ========================================
 # RIGHT COLUMN
@@ -586,6 +580,32 @@ with right_col:
 
 
 
+# SETUP BACKGROUND WEB
+bg_path = r"bg.png"  
+# --- Đọc ảnh và chuyển sang base64 ---
+def get_base64(bin_file):
+    with open(bin_file, "rb") as f:
+        data = f.read()
+    return base64.b64encode(data).decode()
+
+def set_bg_from_local(bg_file):
+    bin_str = get_base64(bg_file)
+    st.markdown(
+        f"""
+        <style>
+        .stApp {{
+            background-image: url("data:image/jpg;base64,{bin_str}");
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+# --- Thêm background ---
+set_bg_from_local(bg_path)
 
 
 
