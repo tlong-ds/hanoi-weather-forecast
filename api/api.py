@@ -1,11 +1,12 @@
-"""
-Weather Forecasting API
-FastAPI implementation for daily and hourly temperature predictions
+# Suppress TensorFlow warnings BEFORE any imports
+import os
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 
-Author: ML Team
-Version: 1.0.0
-Date: 2025-11-16
-"""
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logging
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # Disable oneDNN custom operations
+import warnings
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=DeprecationWarning)
 
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,13 +15,22 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
 import json
-import os
 import sys
 from pathlib import Path
+import time
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
+# Import ClearML for production monitoring
+try:
+    from clearml import Task, Logger
+    CLEARML_AVAILABLE = True
+except ImportError:
+    CLEARML_AVAILABLE = False
+    print("⚠️  ClearML not available - monitoring disabled")
+    print("   Install with: pip install clearml")
 
 # Import ALL custom transformers and functions BEFORE loading models (needed for unpickling)
 # This ensures they're in the module namespace when joblib unpickles the preprocessing pipelines
@@ -64,6 +74,10 @@ app.add_middleware(
 daily_forecaster = None
 evaluation_metrics = None
 
+# ClearML monitoring
+clearml_task = None
+clearml_logger = None
+
 # ============================================================================
 # STARTUP & SHUTDOWN EVENTS
 # ============================================================================
@@ -71,9 +85,31 @@ evaluation_metrics = None
 @app.on_event("startup")
 async def startup_event():
     """Load models and evaluation metrics at startup"""
-    global daily_forecaster, evaluation_metrics
+    global daily_forecaster, evaluation_metrics, clearml_task, clearml_logger
     
     try:
+        # Initialize ClearML monitoring for production
+        if CLEARML_AVAILABLE:
+            print("🔄 Initializing ClearML production monitoring...")
+            clearml_task = Task.init(
+                project_name="Hanoi Weather Forecast",
+                task_name="Production API - Inference Monitoring",
+                task_type="inference",
+                reuse_last_task_id=True,  # Reuse same task for continuous monitoring
+                auto_resource_monitoring=False  # Disable GPU/resource monitoring for CPU-only deployment
+            )
+            clearml_logger = clearml_task.get_logger()
+            print("✅ ClearML monitoring enabled")
+            
+            # Log API configuration
+            clearml_task.connect_configuration({
+                "api_version": "1.0.0",
+                "host": "0.0.0.0",
+                "port": 8000,
+                "model_path": str(project_root / "trained_models"),
+                "data_path": str(project_root / "dataset/hn_daily.csv")
+            })
+        
         # Load daily forecaster
         print("🔄 Loading daily forecaster...")
         daily_forecaster = WeatherForecaster()
@@ -85,6 +121,13 @@ async def startup_event():
             evaluation_metrics = json.load(f)
         print(f"✅ Evaluation metrics loaded successfully")
         
+        # Log model info to ClearML
+        if clearml_logger:
+            for target in ['t+1', 't+2', 't+3', 't+4', 't+5']:
+                metrics = evaluation_metrics[target]['metrics']
+                clearml_logger.report_single_value(f"baseline_{target}_RMSE", metrics['RMSE'])
+                clearml_logger.report_single_value(f"baseline_{target}_R2", metrics['R2'])
+        
     except Exception as e:
         print(f"❌ Failed to load models: {e}")
         raise
@@ -93,6 +136,11 @@ async def startup_event():
 async def shutdown_event():
     """Cleanup on shutdown"""
     print("👋 Shutting down API...")
+    
+    # Close ClearML task
+    if clearml_task:
+        print("📊 Finalizing ClearML monitoring...")
+        clearml_task.close()
 
 # ============================================================================
 # REQUEST/RESPONSE MODELS (Pydantic)
@@ -343,6 +391,9 @@ async def forecast_daily(request: DailyForecastRequest):
         )
     
     try:
+        # Track request start time
+        start_time = time.time()
+        
         # Load raw data - use ALL available data in dataset
         import pandas as pd
         data_path = project_root / "dataset/hn_daily.csv"
@@ -403,6 +454,45 @@ async def forecast_daily(request: DailyForecastRequest):
             }
         )
         
+        # Calculate inference time
+        inference_time = (time.time() - start_time) * 1000  # Convert to ms
+        
+        # Log to ClearML
+        if clearml_logger:
+            # Log inference metrics
+            clearml_logger.report_scalar(
+                title="Production Metrics",
+                series="inference_latency_ms",
+                value=inference_time,
+                iteration=clearml_task.get_last_iteration()
+            )
+            
+            # Log request count
+            clearml_logger.report_scalar(
+                title="Production Metrics",
+                series="prediction_requests",
+                value=1,
+                iteration=clearml_task.get_last_iteration()
+            )
+            
+            # Log predictions for each target
+            for i, target in enumerate(['t+1', 't+2', 't+3', 't+4', 't+5']):
+                clearml_logger.report_scalar(
+                    title="Predictions",
+                    series=f"{target}_temperature",
+                    value=predictions[i].temperature,
+                    iteration=clearml_task.get_last_iteration()
+                )
+            
+            # Log confidence interval usage
+            if request.include_confidence:
+                clearml_logger.report_scalar(
+                    title="Production Metrics",
+                    series="confidence_interval_requests",
+                    value=1,
+                    iteration=clearml_task.get_last_iteration()
+                )
+        
         return DailyForecastResponse(
             status="success",
             forecast_type="daily",
@@ -412,6 +502,25 @@ async def forecast_daily(request: DailyForecastRequest):
             model_version="v1.0.0",
             predictions=predictions,
             metadata=metadata
+        )
+        
+    except FileNotFoundError as e:
+        # Log error to ClearML
+        if clearml_logger:
+            clearml_logger.report_scalar(
+                title="Production Metrics",
+                series="data_load_errors",
+                value=1,
+                iteration=clearml_task.get_last_iteration()
+            )
+        
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "DATA_LOAD_ERROR",
+                "message": f"Data file not found: {str(e)}",
+                "details": {"file": "dataset/hn_daily.csv"}
+            }
         )
         
     except FileNotFoundError as e:
