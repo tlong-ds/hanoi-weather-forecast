@@ -15,9 +15,12 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is
 # DATA CONFIGURATION
 # ============================================================================
 
-# Paths
-DATA_DIR = 'processed_data'
-MODELS_DIR = 'trained_models'
+# Get project root directory (2 levels up from this file)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+# Paths relative to project root
+DATA_DIR = os.path.join(PROJECT_ROOT, 'processed_data')
+MODELS_DIR = os.path.join(PROJECT_ROOT, 'trained_models')
 
 # Ensure directories exist
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -69,7 +72,8 @@ def load_model_config_from_results():
     """
     # Try new two-stage tuning results first
     try:
-        with open('src/daily_forecast_model/final/best_params_per_target.json', 'r') as f:
+        results_path = os.path.join(PROJECT_ROOT, 'src', 'daily_forecast_model', 'final', 'best_params_per_target.json')
+        with open(results_path, 'r') as f:
             best_params_per_target = json.load(f)
             
             # Get model name from first target (all targets use same model)
@@ -91,7 +95,8 @@ def load_model_config_from_results():
     
     # Try stage 1 results (architecture only, no deep tuning)
     try:
-        with open('src/daily_forecast_model/final/architecture_selection.json', 'r') as f:
+        results_path = os.path.join(PROJECT_ROOT, 'src', 'daily_forecast_model', 'final', 'architecture_selection.json')
+        with open(results_path, 'r') as f:
             architecture_selection = json.load(f)
             model_name = architecture_selection['best_architecture']
             params = {k: v for k, v in architecture_selection['best_params'].items() if k != 'model_name'}
@@ -106,7 +111,8 @@ def load_model_config_from_results():
     
     # Try legacy best_params.json
     try:
-        with open('best_params.json', 'r') as f:
+        results_path = os.path.join(PROJECT_ROOT, 'best_params.json')
+        with open(results_path, 'r') as f:
             best_params = json.load(f)
             model_name = best_params.pop('model_name')
             params = {k: v for k, v in best_params.items() if k != 'model_name'}
@@ -180,7 +186,7 @@ HORIZONS_TO_PLOT = None  # None means plot all horizons
 
 # Plot saving configuration
 SAVE_PLOTS = True  # Save plots to disk
-PLOTS_DIR = 'plots'  # Directory to save plots
+PLOTS_DIR = os.path.join(PROJECT_ROOT, 'plots')  # Directory to save plots
 PLOT_FORMAT = 'png'  # Format: 'png', 'jpg', 'pdf', 'svg'
 
 # Ensure plots directory exists

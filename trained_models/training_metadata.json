@@ -1,0 +1,42 @@
+{
+  "t+1": {
+    "model": "CatBoost",
+    "feature_type": "SHORT-TERM",
+    "n_features": 34,
+    "n_samples": 3320,
+    "tuned_rmse": 1.4886751893405843,
+    "training_time": 0.8127758502960205
+  },
+  "t+2": {
+    "model": "CatBoost",
+    "feature_type": "COMBINED",
+    "n_features": 43,
+    "n_samples": 3320,
+    "tuned_rmse": 2.168812543616968,
+    "training_time": 0.30044007301330566
+  },
+  "t+3": {
+    "model": "CatBoost",
+    "feature_type": "COMBINED",
+    "n_features": 43,
+    "n_samples": 3320,
+    "tuned_rmse": 2.497732107202842,
+    "training_time": 0.8325948715209961
+  },
+  "t+4": {
+    "model": "CatBoost",
+    "feature_type": "COMBINED",
+    "n_features": 43,
+    "n_samples": 3320,
+    "tuned_rmse": 2.6179991295180587,
+    "training_time": 0.17345070838928223
+  },
+  "t+5": {
+    "model": "CatBoost",
+    "feature_type": "LONG-TERM",
+    "n_features": 34,
+    "n_samples": 3320,
+    "tuned_rmse": 2.6467080219006225,
+    "training_time": 0.4321279525756836
+  }
+}
