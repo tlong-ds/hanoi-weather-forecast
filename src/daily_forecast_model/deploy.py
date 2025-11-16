@@ -84,9 +84,12 @@ class ClearMLModelDeployer:
         if not self.task:
             self.initialize_task()
         
-        # Upload model file using OutputModel
-        output_model = self.task.create_output_model(
-            model_name=model_name,
+        # Create OutputModel from task
+        from clearml import OutputModel
+        
+        output_model = OutputModel(
+            task=self.task,
+            name=model_name,
             tags=tags or [],
             comment=comment or f"Weather forecast model: {model_name}"
         )
@@ -97,7 +100,7 @@ class ClearMLModelDeployer:
             auto_delete_file=False
         )
         
-        # Add metadata
+        # Add metadata as configuration
         if metadata:
             output_model.update_design(config_dict=metadata)
         
