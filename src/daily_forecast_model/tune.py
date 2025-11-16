@@ -7,7 +7,7 @@ import pandas as pd
 import os
 import json
 from clearml import Task, Logger
-from daily_forecast_model.helper import DEVICE 
+from src.daily_forecast_model.helper import DEVICE 
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, mean_absolute_percentage_error
