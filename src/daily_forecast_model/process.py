@@ -176,13 +176,34 @@ def create_temporal_features(df, season_config=SEASON_CONFIG):
 def create_lag_features(df, lag_config=LAG_PERIODS):
     """
     Create lag features to capture previous days' conditions.
+    
+    Args:
+        df: Input DataFrame
+        lag_config: Dictionary mapping feature names to list of lag periods
+    
+    Returns:
+        DataFrame with lag features added and original features removed to prevent leakage
     """
     df_new = df.copy()
+    
+    # Track which original features we're creating lags for
+    features_with_lags = []
 
     for feature, lags in lag_config.items():
         if feature in df_new.columns:
+            features_with_lags.append(feature)
             for lag in lags:
                 df_new[f'{feature}_lag{lag}'] = df_new[feature].shift(lag)
+    
+    # IMPORTANT: Drop original features to prevent data leakage
+    # We shouldn't use today's value to predict tomorrow (we won't have it yet!)
+    # Exception: Keep 'temp' if it's in the list (we need current temp as a feature)
+    features_to_drop = [f for f in features_with_lags if f != TARGET_COLUMN]
+    
+    if features_to_drop:
+        print(f"  [Lag Features] Dropping {len(features_to_drop)} original features to prevent leakage:")
+        print(f"    {', '.join(features_to_drop)}")
+        df_new = df_new.drop(columns=features_to_drop, errors='ignore')
     
     return df_new
 
