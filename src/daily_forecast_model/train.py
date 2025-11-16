@@ -1,10 +1,3 @@
-"""
-Training module for per-target weather forecasting models.
-
-This module trains individual models for each forecast horizon (t+1 through t+5)
-using target-specific feature selection and optimized hyperparameters from tuning.
-"""
-
 import pandas as pd
 import numpy as np
 import time
@@ -74,39 +67,25 @@ def load_data_for_target(day_step, use_combined_train_dev=True):
 
 def create_model(model_name, params):
     """
-    Create a model instance with the given parameters.
+    Create a model instance with the given parameters from tuning.
     
     Args:
         model_name (str): Model architecture name
-        params (dict): Model hyperparameters
+        params (dict): Model hyperparameters from tuning results
     
     Returns:
         model: Instantiated model
     """
-    # Ensure device-specific params are set
-    params = params.copy()  # Don't modify original
-    
     if model_name == "RandomForest":
-        params.setdefault('n_jobs', -1)
-        params.setdefault('random_state', 42)
         return RandomForestRegressor(**params)
     
     elif model_name == "XGBoost":
-        params.setdefault('tree_method', 'hist')
-        params.setdefault('device', 'cuda' if str(DEVICE) == 'cuda' else 'cpu')
-        params.setdefault('random_state', 42)
         return XGBRegressor(**params)
     
     elif model_name == "LightGBM":
-        params.setdefault('device_type', 'cpu')
-        params.setdefault('n_jobs', -1)
-        params.setdefault('random_state', 42)
         return LGBMRegressor(**params)
     
     elif model_name == "CatBoost":
-        params.setdefault('task_type', 'GPU' if str(DEVICE) == 'cuda' else 'CPU')
-        params.setdefault('verbose', 0)
-        params.setdefault('random_state', 42)
         return CatBoostRegressor(**params)
     
     else:

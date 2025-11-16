@@ -1,0 +1,11 @@
+{
+  "best_architecture": "CatBoost",
+  "best_rmse": 2.502656671212861,
+  "best_params": {
+    "model_name": "CatBoost",
+    "cat_iterations": 700,
+    "cat_depth": 4,
+    "cat_learning_rate": 0.01,
+    "cat_l2_leaf_reg": 3.0
+  }
+}

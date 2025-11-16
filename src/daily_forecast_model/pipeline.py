@@ -1,15 +1,3 @@
-"""
-ClearML Pipeline using PipelineDecorator for Hanoi Weather Forecasting
-Modern, Pythonic approach to ML pipeline orchestration
-
-This pipeline automates:
-1. Data preprocessing and feature engineering
-2. Hyperparameter tuning (optional)
-3. Model training for all 5 targets (t+1 to t+5)
-4. Model evaluation
-5. Model deployment to ClearML registry
-"""
-
 from clearml import PipelineDecorator, Task
 from pathlib import Path
 import joblib
