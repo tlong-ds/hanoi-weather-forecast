@@ -10,7 +10,7 @@ from xgboost import XGBRegressor
 from sklearn.multioutput import MultiOutputRegressor
 
 # Import configuration and helper functions
-from model_helper import (
+from daily_forecast_model.helper import (
     TARGET_COLUMNS, RANDOM_STATE, MODEL_CONFIGS, 
     SAVE_MODELS, LOAD_SAVED_MODELS, MODEL_FORMAT, MODELS_DIR, CONVERT_TO_ONNX,
     LOG_TRAINING_TIME, VERBOSE_TRAINING, get_enabled_models, load_data
