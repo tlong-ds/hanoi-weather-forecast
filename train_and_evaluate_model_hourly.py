@@ -20,7 +20,6 @@ Y_TRAIN = os.path.join(DATA_DIR, "y_train_hourly.csv")
 X_DEV   = os.path.join(DATA_DIR, "X_dev_transformed_hourly.csv")
 Y_DEV   = os.path.join(DATA_DIR, "y_dev_hourly.csv")
 
-MODEL_OUT    = os.path.join(DATA_DIR, "rf_multioutput_hourly.pkl")
 METRICS_OUT  = os.path.join(DATA_DIR, "model_evaluation_results_hourly.csv")
 PLOT_METRICS = os.path.join(DATA_DIR, "metrics_bar_hourly.png")
 PLOT_SCATTER = os.path.join(DATA_DIR, "pred_vs_actual_hourly.png")
@@ -63,7 +62,7 @@ y_pred = model.predict(X_dv)
 maes, rmses = [], []
 for i, col in enumerate(TARGET_COLUMNS):
     mae = mean_absolute_error(y_dv.iloc[:, i], y_pred[:, i])
-    rmse = mean_squared_error(y_dv.iloc[:, i], y_pred[:, i], squared=False)
+    rmse = mean_squared_error(y_dv.iloc[:, i], y_pred[:, i])
     maes.append(float(mae)); rmses.append(float(rmse))
 
 metrics = {f"{TARGET_COLUMNS[i]}_MAE": maes[i] for i in range(24)}
@@ -74,8 +73,6 @@ print(f"Dev  Avg MAE: {metrics['Average_MAE']:.4f} | Avg RMSE: {metrics['Average
 
 # ---- 6) Lưu model + metrics ----
 os.makedirs(DATA_DIR, exist_ok=True)
-joblib.dump(model, MODEL_OUT)
-
 ordered_cols = []
 for c in TARGET_COLUMNS:
     ordered_cols += [f"{c}_MAE", f"{c}_RMSE"]
@@ -83,7 +80,6 @@ ordered_cols += ["Average_MAE", "Average_RMSE"]
 pd.DataFrame([{k: metrics[k] for k in ordered_cols}]).to_csv(METRICS_OUT, index=False)
 
 print("\nSaved:")
-print("  Model  ->", os.path.abspath(MODEL_OUT))
 print("  Metrics->", os.path.abspath(METRICS_OUT))
 
 # ---- 7) Plots ----
