@@ -2,6 +2,13 @@
 # Tuning cho bài toán dự báo nhiệt độ hourly (t+1h..t+24h)
 # Dữ liệu lấy từ: data_processing_hourly/
 # Cấu trúc dựa trên: run_tuning_DIRECT.py
+#
+# PHIÊN BẢN ĐÃ SỬA:
+# 1. Chỉ load data 1 lần (ngoài vòng lặp)
+# 2. Bỏ biến global, dùng lambda
+# 3. Thêm `log=True` cho learning_rate
+# 4. Cải thiện ClearML logging
+# 5. Kiểm tra model khả dụng
 # ==========================================================
 
 import warnings
@@ -49,10 +56,6 @@ Y_DEV_FILE   = "y_dev_hourly.csv"
 # 24 horizons: t+1h..t+24h
 N_STEPS_AHEAD = 24
 
-# Biến toàn cục để Optuna dùng trong objective()
-current_X_train, current_y_train = None, None
-current_X_dev, current_y_dev = None, None
-
 
 # =============== BƯỚC 1: KHỞI TẠO CLEARML TASK ===============
 task = Task.init(
@@ -60,60 +63,27 @@ task = Task.init(
     task_name="Optuna_Tuning_Hourly_MultiStep (4 Models)"
 )
 
-
-# =============== BƯỚC 2: TẢI DỮ LIỆU CHO MỖI HORIZON ===============
-def load_data_for_horizon(h_step: int):
-    """
-    Tải dữ liệu đã được preprocessing cho horizon t+{h_step}h.
-    - X_train, X_dev dùng chung cho mọi horizon.
-    - y_train, y_dev chọn đúng 1 cột target_temp_t+{h_step}h.
-    """
-    global DATA_DIR
-
-    X_train_path = os.path.join(DATA_DIR, X_TRAIN_FILE)
-    y_train_path = os.path.join(DATA_DIR, Y_TRAIN_FILE)
-    X_dev_path   = os.path.join(DATA_DIR, X_DEV_FILE)
-    y_dev_path   = os.path.join(DATA_DIR, Y_DEV_FILE)
-
-    target_col = f"target_temp_t+{h_step}h"
-
-    print(f"\nLoading data for horizon: {target_col}")
-    print("  From directory:", os.path.abspath(DATA_DIR))
-
-    try:
-        X_train = pd.read_csv(X_train_path, index_col=0)
-        y_train_df = pd.read_csv(y_train_path, index_col=0)
-
-        X_dev = pd.read_csv(X_dev_path, index_col=0)
-        y_dev_df = pd.read_csv(y_dev_path, index_col=0)
-
-        if target_col not in y_train_df.columns:
-            raise KeyError(f"Không tìm thấy cột {target_col} trong y_train_hourly.csv")
-
-        # Lấy 1 cột target tương ứng horizon này
-        y_train = y_train_df[target_col].values.ravel()
-        y_dev   = y_dev_df[target_col].values.ravel()
-
-        print(f"  X_train: {X_train.shape}, y_train: {y_train.shape}")
-        print(f"  X_dev:   {X_dev.shape},   y_dev:   {y_dev.shape}")
-
-        return X_train, y_train, X_dev, y_dev
-
-    except FileNotFoundError as e:
-        print("❌ LỖI: Không tìm thấy một trong các file dữ liệu hourly.")
-        print("  Hãy đảm bảo đã chạy 'preprocessing_hourly.py'.")
-        print("  Lỗi gốc:", e)
-        return None, None, None, None
-    except Exception as e:
-        print("❌ LỖI khi load dữ liệu:", e)
-        return None, None, None, None
+# =============== BƯỚC 2: TẢI DỮ LIỆU (ĐÃ BỎ) ===============
+# Hàm load_data_for_horizon đã được tích hợp vào main()
+# để tránh đọc file 24 lần.
 
 
 # =============== BƯỚC 3: ĐỊNH NGHĨA OBJECTIVE FUNCTION (OPTUNA) ===============
-def objective(trial):
+# Thêm tham số (X_train, y_train, X_dev, y_dev) để tránh dùng global
+def objective(trial, X_train, y_train, X_dev, y_dev):
+    
+    # [FIX 2] Tự động build danh sách model đã cài
+    available_models = ["Random Forest"]
+    if XGBRegressor is not None:
+        available_models.append("XGBoost")
+    if LGBMRegressor is not None:
+        available_models.append("LightGBM")
+    if CatBoostRegressor is not None:
+        available_models.append("CatBoost")
+
     model_name = trial.suggest_categorical(
         "model_name",
-        ["Random Forest", "XGBoost", "LightGBM", "CatBoost"]
+        available_models # Chỉ chọn từ các model khả dụng
     )
 
     # -------- RANDOM FOREST --------
@@ -128,11 +98,11 @@ def objective(trial):
         model = RandomForestRegressor(**params)
 
     # -------- XGBOOST --------
-    elif model_name == "XGBoost" and XGBRegressor is not None:
+    elif model_name == "XGBoost":
         params = {
             "n_estimators": trial.suggest_int("n_estimators", 200, 600, step=100),
             "max_depth": trial.suggest_int("max_depth", 4, 10),
-            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True), # [FIX 5]
             "subsample": trial.suggest_float("subsample", 0.6, 1.0),
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
             "tree_method": "hist",
@@ -142,12 +112,12 @@ def objective(trial):
         model = XGBRegressor(**params)
 
     # -------- LIGHTGBM --------
-    elif model_name == "LightGBM" and LGBMRegressor is not None:
+    elif model_name == "LightGBM":
         params = {
             "n_estimators": trial.suggest_int("n_estimators", 200, 600, step=100),
             "num_leaves": trial.suggest_int("num_leaves", 20, 60),
             "max_depth": trial.suggest_int("max_depth", 3, 12),
-            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True), # [FIX 5]
             "subsample": trial.suggest_float("subsample", 0.6, 1.0),
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
             "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 5.0),
@@ -159,11 +129,11 @@ def objective(trial):
         model = LGBMRegressor(**params)
 
     # -------- CATBOOST --------
-    elif model_name == "CatBoost" and CatBoostRegressor is not None:
+    elif model_name == "CatBoost":
         params = {
             "iterations": trial.suggest_int("iterations", 200, 600, step=100),
             "depth": trial.suggest_int("depth", 4, 10),
-            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.1),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.1, log=True), # [FIX 5]
             "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1.0, 5.0),
             "bootstrap_type": "Bernoulli",
             "subsample": trial.suggest_float("subsample", 0.6, 1.0),
@@ -174,18 +144,14 @@ def objective(trial):
         }
         model = CatBoostRegressor(**params)
 
-    else:
-        raise ValueError(f"❌ Model {model_name} không khả dụng hoặc chưa import được.")
-
     # -------- TRAIN + EVAL TRÊN DEV --------
-    global current_X_train, current_y_train, current_X_dev, current_y_dev
+    # [FIX 3] Không cần global, dùng tham số truyền vào
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_dev)
 
-    model.fit(current_X_train, current_y_train)
-    y_pred = model.predict(current_X_dev)
-
-    rmse = np.sqrt(mean_squared_error(current_y_dev, y_pred))
-    mae  = mean_absolute_error(current_y_dev, y_pred)
-    mape = mean_absolute_percentage_error(current_y_dev, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_dev, y_pred))
+    mae  = mean_absolute_error(y_dev, y_pred)
+    mape = mean_absolute_percentage_error(y_dev, y_pred)
 
     # (tuỳ chọn) log thêm vào trial để xem phân bố
     trial.set_user_attr("mae", float(mae))
@@ -199,23 +165,47 @@ if __name__ == "__main__":
 
     logger = Logger.current_logger()
 
+    # [FIX 1] Tải dữ liệu 1 LẦN DUY NHẤT
+    print("🚀 Đang tải dữ liệu X, y (DataFrame)...")
+    try:
+        X_train_path = os.path.join(DATA_DIR, X_TRAIN_FILE)
+        y_train_path = os.path.join(DATA_DIR, Y_TRAIN_FILE)
+        X_dev_path   = os.path.join(DATA_DIR, X_DEV_FILE)
+        y_dev_path   = os.path.join(DATA_DIR, Y_DEV_FILE)
+
+        X_train = pd.read_csv(X_train_path, index_col=0)
+        y_train_df = pd.read_csv(y_train_path, index_col=0)
+        X_dev = pd.read_csv(X_dev_path, index_col=0)
+        y_dev_df = pd.read_csv(y_dev_path, index_col=0)
+        
+        print(f"  Tải thành công X_train: {X_train.shape}, y_train_df: {y_train_df.shape}")
+        print(f"  Tải thành công X_dev:   {X_dev.shape},   y_dev_df:   {y_dev_df.shape}")
+
+    except Exception as e:
+        print(f"❌ LỖI NGHIÊM TRỌNG: Không thể tải dữ liệu ban đầu. Dừng chương trình.")
+        print(f"  Kiểm tra lại đường dẫn: {os.path.abspath(DATA_DIR)}")
+        print(f"  Lỗi gốc: {e}")
+        exit() # Thoát nếu không load được file
+
     print(f"===== 🚀 BẮT ĐẦU TUNING CHO 24 HORIZONS (t+1h .. t+{N_STEPS_AHEAD}h) =====")
 
     for h_step in range(1, N_STEPS_AHEAD + 1):
         horizon_str = f"t+{h_step}h"
+        target_col = f"target_temp_t+{h_step}h" # Đảm bảo tên cột này chính xác
+
         print(f"\n{'='*80}")
-        print(f"🎯 BẮT ĐẦU TUNING CHO HORIZON: {horizon_str}")
+        print(f"🎯 BẮT ĐẦU TUNING CHO HORIZON: {horizon_str} (Cột: {target_col})")
         print(f"{'='*80}")
 
-        # 1. Load data cho horizon này
-        X_train, y_train, X_dev, y_dev = load_data_for_horizon(h_step)
-        if X_train is None:
-            print(f"⚠️ Bỏ qua {horizon_str} vì không load được dữ liệu.")
+        # 1. [FIX 1] Lấy dữ liệu y cho horizon này (không đọc file)
+        if target_col not in y_train_df.columns:
+            print(f"⚠️ Cảnh báo: Không tìm thấy cột {target_col} trong y_train_df. Bỏ qua horizon này.")
             continue
+        
+        y_train = y_train_df[target_col].values.ravel()
+        y_dev   = y_dev_df[target_col].values.ravel()
 
-        # 2. Gán data vào biến global cho objective()
-        current_X_train, current_y_train = X_train, y_train
-        current_X_dev, current_y_dev     = X_dev, y_dev
+        # 2. [FIX 3] Không cần gán vào biến global
 
         # 3. Tạo một Study riêng cho mỗi horizon
         study = optuna.create_study(
@@ -223,8 +213,12 @@ if __name__ == "__main__":
             study_name=f"Tuning_4Models_{horizon_str}"
         )
 
-        # 4. Chạy optimize
-        study.optimize(objective, n_trials=60, show_progress_bar=True)
+        # 4. [FIX 3] Chạy optimize dùng lambda để truyền data
+        study.optimize(
+            lambda trial: objective(trial, X_train, y_train, X_dev, y_dev), 
+            n_trials=60, 
+            show_progress_bar=True
+        )
 
         # 5. Lấy kết quả tốt nhất
         best_params = study.best_trial.params
@@ -239,12 +233,13 @@ if __name__ == "__main__":
             print(f"    - {k}: {v}")
 
         # 6. Log kết quả lên ClearML
-        # RMSE per horizon
+        
+        # [FIX 4] Log RMSE vào 1 biểu đồ duy nhất
         logger.report_scalar(
-            title="Best RMSE per Horizon",
-            series=horizon_str,
-            value=best_rmse,
-            iteration=h_step
+            title="Best RMSE per Horizon",  # Tên biểu đồ
+            series="RMSE",                  # Tên đường line
+            value=best_rmse,                # Giá trị (trục Y)
+            iteration=h_step                # Horizon (trục X)
         )
 
         # Log model name
