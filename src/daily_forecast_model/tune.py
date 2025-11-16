@@ -1,9 +1,3 @@
-# ================== run_tuning.py ==================
-# Two-Stage Hyperparameter Tuning:
-#   Stage 1: Find best architecture (40 trials)
-#   Stage 2: Deep tune winner per target (100 trials × 5)
-# ====================================================
-
 import warnings
 warnings.filterwarnings("ignore")
 
