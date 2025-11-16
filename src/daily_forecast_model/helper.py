@@ -51,32 +51,94 @@ RANDOM_STATE = 42
 # Model configurations
 import json
 
-# Try to load best_params.json if it exists, otherwise use default
-try:
-    with open('best_params.json', 'r') as f:
-        best_params = json.load(f)
-        model_name = best_params.pop('model_name')
-        other_params = {k: v for k, v in best_params.items() if k != 'model_name'}
-except FileNotFoundError:
-    print("⚠️  Warning: best_params.json not found. Using default CatBoost configuration.")
-    print("   Run tuning (tune.py) to generate optimized parameters.")
-    model_name = "CatBoost"
-    other_params = {
-        "iterations": 500,
-        "depth": 6,
-        "learning_rate": 0.05,
-        "l2_leaf_reg": 3.0,
-        "random_state": RANDOM_STATE,
-        "verbose": 0
-    }
+# Load tuning results from results/ directory (new structure from two-stage tuning)
+def load_model_config_from_results():
+    """
+    Load model configuration from tuning results.
+    
+    Priority:
+    1. results/best_params_per_target.json (per-target optimized params)
+    2. results/architecture_selection.json (best architecture)
+    3. best_params.json (legacy single-file format)
+    
+    Returns:
+        tuple: (model_name, params_dict, per_target_params or None)
+    
+    Raises:
+        FileNotFoundError: If no tuning results files are found
+    """
+    # Try new two-stage tuning results first
+    try:
+        with open('src/daily_forecast_model/final/best_params_per_target.json', 'r') as f:
+            best_params_per_target = json.load(f)
+            
+            # Get model name from first target (all targets use same model)
+            first_target = list(best_params_per_target.values())[0]
+            model_name = first_target['model']
+            
+            # For multi-output wrapper, use params from t+3 (middle target) as representative
+            # Or you could use t+1 for short-term bias
+            representative_target = 't+3' if 't+3' in best_params_per_target else list(best_params_per_target.keys())[0]
+            params = best_params_per_target[representative_target]['params']
+            
+            print(f"✓ Loaded optimized {model_name} configuration from src/daily_forecast_model/final/best_params_per_target.json")
+            print(f"  Using {representative_target} parameters as representative for multi-output model")
+            
+            return model_name, params, best_params_per_target
+            
+    except FileNotFoundError:
+        pass
+    
+    # Try stage 1 results (architecture only, no deep tuning)
+    try:
+        with open('src/daily_forecast_model/final/architecture_selection.json', 'r') as f:
+            architecture_selection = json.load(f)
+            model_name = architecture_selection['best_architecture']
+            params = {k: v for k, v in architecture_selection['best_params'].items() if k != 'model_name'}
+            
+            print(f"✓ Loaded {model_name} architecture from src/daily_forecast_model/final/architecture_selection.json")
+            print(f"  Note: Using stage 1 params (not deeply optimized). Run stage 2 for better results.")
+            
+            return model_name, params, None
+            
+    except FileNotFoundError:
+        pass
+    
+    # Try legacy best_params.json
+    try:
+        with open('best_params.json', 'r') as f:
+            best_params = json.load(f)
+            model_name = best_params.pop('model_name')
+            params = {k: v for k, v in best_params.items() if k != 'model_name'}
+            
+            print(f"✓ Loaded {model_name} configuration from best_params.json (legacy format)")
+            
+            return model_name, params, None
+            
+    except FileNotFoundError:
+        pass
+    
+    # No tuning results found - raise error
+    raise FileNotFoundError(
+        "No tuning results found. Please run tuning first:\n"
+        "  1. Execute run_tuning.ipynb in Google Colab, or\n"
+        "  2. Run: python src/daily_forecast_model/tune.py\n"
+        "This will generate src/daily_forecast_model/final/best_params_per_target.json and src/daily_forecast_model/final/architecture_selection.json"
+    )
+
+# Load configuration
+model_name, model_params, per_target_params = load_model_config_from_results()
 
 MODEL_CONFIGS = {
     model_name: {
-        "params": {**other_params},
+        "params": {**model_params},
         "enabled": True,
-        "description": f"{model_name} with multi-output wrapper"
+        "description": f"{model_name} with multi-output wrapper (optimized via two-stage tuning)"
     }
 }
+
+# Store per-target params for future use (if available)
+PER_TARGET_PARAMS = per_target_params
 
 # ============================================================================
 # TRAINING CONFIGURATION
@@ -198,6 +260,47 @@ def get_model_name(model_key):
 def get_enabled_models():
     """Get dictionary of only enabled models."""
     return {k: v for k, v in MODEL_CONFIGS.items() if v['enabled']}
+
+
+def get_per_target_params(target_name):
+    """
+    Get optimized parameters for a specific target horizon.
+    
+    Args:
+        target_name (str): Target name like 't+1', 't+2', etc.
+    
+    Returns:
+        dict: Parameters for that target, or None if not available
+    """
+    if PER_TARGET_PARAMS is not None and target_name in PER_TARGET_PARAMS:
+        return PER_TARGET_PARAMS[target_name]['params']
+    return None
+
+
+def get_tuning_summary():
+    """
+    Get summary of tuning results.
+    
+    Returns:
+        dict: Summary with model name, RMSE per target, feature types, etc.
+    """
+    if PER_TARGET_PARAMS is None:
+        return None
+    
+    summary = {
+        'model': model_name,
+        'n_targets': len(PER_TARGET_PARAMS),
+        'targets': {}
+    }
+    
+    for target_name, target_info in PER_TARGET_PARAMS.items():
+        summary['targets'][target_name] = {
+            'rmse': target_info.get('best_rmse', None),
+            'feature_type': target_info.get('feature_type', None),
+            'n_features': target_info.get('n_features', None)
+        }
+    
+    return summary
 
 
 def get_all_target_columns():
