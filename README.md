@@ -371,28 +371,6 @@ python train_and_evaluate_model_hourly.py
 
 ---
 
-## 🧪 Testing & Validation
-
-### Run Tests
-```bash
-# Unit tests (if available)
-pytest tests/
-
-# API health check
-curl http://localhost:8000/api/v1/health
-```
-
-### Model Validation
-```bash
-# Evaluate hourly models
-python train_and_evaluate_model_hourly.py
-
-# Check ONNX runtime
-python test_onnx_runtime_gpu.py
-```
-
----
-
 ## 🐳 Deployment
 
 ### Hugging Face Spaces
