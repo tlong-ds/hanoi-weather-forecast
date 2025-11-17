@@ -198,7 +198,6 @@ def objective_stage2(trial, model_name, X_train, y_train, X_dev, y_dev):
             "min_child_samples": trial.suggest_int("min_child_samples", 5, 50),
             "n_jobs": -1,
             "random_state": RANDOM_STATE,
-            "verbose": -1
         }
         model = lgb.LGBMRegressor(**params)
     
