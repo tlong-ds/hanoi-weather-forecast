@@ -323,6 +323,60 @@ async def root():
     }
 
 
+@app.get("/api/v1/data/historical", tags=["Data"])
+async def get_historical_data(days: int = 30):
+    """
+    Get historical weather data
+    
+    Args:
+        days: Number of days of historical data to return (default: 30, max: 365)
+    
+    Returns:
+        Historical weather data in JSON format
+    """
+    try:
+        # Limit days to prevent excessive data transfer
+        days = min(days, 365)
+        
+        # Load historical data
+        daily_data_path = project_root / "dataset/hn_daily.csv"
+        df = pd.read_csv(daily_data_path, parse_dates=['datetime'])
+        df = df.sort_values('datetime', ascending=False)
+        
+        # Get last N days
+        df = df.head(days).sort_values('datetime', ascending=True)
+        
+        # Convert to records
+        records = df.to_dict('records')
+        
+        # Convert datetime to string
+        for record in records:
+            if isinstance(record.get('datetime'), pd.Timestamp):
+                record['datetime'] = record['datetime'].strftime('%Y-%m-%d')
+        
+        return {
+            "status": "success",
+            "data_type": "historical",
+            "total_records": len(records),
+            "date_range": {
+                "start": records[0]['datetime'] if records else None,
+                "end": records[-1]['datetime'] if records else None
+            },
+            "records": records
+        }
+        
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="Historical data file not found"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error loading historical data: {str(e)}"
+        )
+
+
 @app.get("/api/v1/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
     """
