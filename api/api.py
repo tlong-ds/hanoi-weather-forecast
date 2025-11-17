@@ -8,9 +8,9 @@ import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=DeprecationWarning)
 
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException, Depends, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
@@ -20,6 +20,13 @@ from pathlib import Path
 import time
 import pandas as pd
 import numpy as np
+# Import Gemini helper (generative enrichment)
+from src.generative.gemini_weather import (
+    get_weather_details_via_gemini,
+    get_hourly_metadata_via_gemini,
+)
+# Import data feeder
+from src.data_feeder import update_weather_data
 
 project_root = Path(__file__).parent
 if project_root.name == '':  # Handle case where parent is root
@@ -173,18 +180,17 @@ class DailyForecastRequest(BaseModel):
 class HourlyForecastRequest(BaseModel):
     """Request schema for hourly temperature forecast"""
     location: Optional[str] = Field(default="Hanoi, Vietnam", description="Location name")
-    datetime: Optional[str] = Field(default=None, description="Reference datetime (ISO 8601)")
+    reference_datetime: Optional[str] = Field(default=None, description="Reference datetime to predict from (ISO 8601)")
     include_confidence: Optional[bool] = Field(default=False, description="Include confidence intervals")
-    hours_ahead: Optional[int] = Field(default=24, ge=1, le=24, description="Number of hours to forecast (1-24)")
     
-    @field_validator('datetime')
+    @field_validator('reference_datetime')
     @classmethod
     def validate_datetime(cls, v):
         if v is not None:
             try:
                 datetime.fromisoformat(v.replace('Z', '+00:00'))
             except ValueError:
-                raise ValueError('Datetime must be in ISO 8601 format')
+                raise ValueError('Reference datetime must be in ISO 8601 format')
         return v
 
 
@@ -324,27 +330,35 @@ async def root():
 
 
 @app.get("/api/v1/data/historical", tags=["Data"])
-async def get_historical_data(days: int = 30):
+async def get_historical_data(days: Optional[int] = None):
     """
     Get historical weather data
     
     Args:
-        days: Number of days of historical data to return (default: 30, max: 365)
+        days: Number of days of historical data to return (max: 365). If omitted or null,
+              the endpoint will return the entire historical dataset.
     
     Returns:
         Historical weather data in JSON format
     """
     try:
-        # Limit days to prevent excessive data transfer
-        days = min(days, 365)
+        # If `days` is provided, enforce reasonable limits (max 365).
+        # If `days` is None, return the full dataset.
+        if days is not None:
+            # ensure non-negative and cap to 365
+            days = max(0, days)
+            days = min(days, 365)
         
         # Load historical data
         daily_data_path = project_root / "dataset/hn_daily.csv"
         df = pd.read_csv(daily_data_path, parse_dates=['datetime'])
         df = df.sort_values('datetime', ascending=False)
         
-        # Get last N days
-        df = df.head(days).sort_values('datetime', ascending=True)
+        # If days was provided, return the last N days; otherwise return all records
+        if days is not None and days > 0:
+            df = df.head(days).sort_values('datetime', ascending=True)
+        else:
+            df = df.sort_values('datetime', ascending=True)
         
         # Replace NaN and Inf values with None for JSON serialization
         df = df.replace([np.nan, np.inf, -np.inf], None)
@@ -387,6 +401,73 @@ async def get_historical_data(days: int = 30):
         raise HTTPException(
             status_code=500,
             detail=f"Error loading historical data: {str(e)}"
+        )
+
+
+@app.get("/api/v1/data/historical/hourly", tags=["Data"])
+async def get_historical_hourly_data(hours: int = 24):
+    """
+    Get historical hourly weather data
+    
+    Args:
+        hours: Number of hours of historical data to return (default: 24, max: 168)
+    
+    Returns:
+        Historical hourly weather data in JSON format
+    """
+    try:
+        # Limit hours to prevent excessive data transfer
+        hours = min(hours, 168)
+        
+        # Load historical hourly data
+        hourly_data_path = project_root / "dataset/hn_hourly.csv"
+        df = pd.read_csv(hourly_data_path, parse_dates=['datetime'])
+        df = df.sort_values('datetime', ascending=False)
+        
+        # Get last N hours
+        df = df.head(hours).sort_values('datetime', ascending=True)
+        
+        # Replace NaN and Inf values with None for JSON serialization
+        df = df.replace([np.nan, np.inf, -np.inf], None)
+        
+        # Convert to records
+        records = df.to_dict('records')
+        
+        # Convert datetime to string and clean up values
+        for record in records:
+            if isinstance(record.get('datetime'), pd.Timestamp):
+                record['datetime'] = record['datetime'].isoformat()
+            
+            # Ensure all numeric values are JSON-compliant
+            for key, value in record.items():
+                if value is None:
+                    continue
+                if isinstance(value, (np.integer, np.floating)):
+                    if np.isnan(value) or np.isinf(value):
+                        record[key] = None
+                    else:
+                        record[key] = float(value) if isinstance(value, np.floating) else int(value)
+        
+        return {
+            "status": "success",
+            "data_type": "historical_hourly",
+            "total_records": len(records),
+            "datetime_range": {
+                "start": records[0]['datetime'] if records else None,
+                "end": records[-1]['datetime'] if records else None
+            },
+            "records": records
+        }
+        
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="Historical hourly data file not found"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error loading historical hourly data: {str(e)}"
         )
 
 
@@ -719,8 +800,22 @@ async def forecast_hourly(request: HourlyForecastRequest):
                 }
             )
         
-        # Get reference datetime (last datetime in dataset)
-        reference_datetime = df_hourly['datetime'].iloc[-1]
+        # Get reference datetime - use from request or default to last datetime in dataset
+        if request.reference_datetime:
+            reference_datetime = pd.to_datetime(request.reference_datetime)
+            # Filter data up to reference datetime
+            df_hourly = df_hourly[df_hourly['datetime'] <= reference_datetime]
+            if len(df_hourly) < 168:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "INSUFFICIENT_DATA",
+                        "message": f"Not enough data before reference datetime: need 168 hours, got {len(df_hourly)}",
+                        "details": {"reference_datetime": request.reference_datetime}
+                    }
+                )
+        else:
+            reference_datetime = df_hourly['datetime'].iloc[-1]
         
         # Get predictions from forecaster
         results_df = hourly_forecaster.predict(df_hourly)
@@ -747,9 +842,7 @@ async def forecast_hourly(request: HourlyForecastRequest):
             
             predictions.append(pred)
         
-        # Filter by hours_ahead if specified
-        if request.hours_ahead and request.hours_ahead < 24:
-            predictions = predictions[:request.hours_ahead]
+        # Always return all 24 hours of predictions
         
         # Calculate metadata
         metadata = ForecastMetadata(
@@ -812,6 +905,104 @@ async def forecast_hourly(request: HourlyForecastRequest):
                 "details": {"error_type": type(e).__name__}
             }
         )
+
+
+@app.get("/api/v1/gemini/weather_details", tags=["Generative"])
+async def gemini_weather_details(date: str):
+    """Return non-temperature weather details for the specified date.
+
+    This endpoint loads the internal daily dataset and extracts the row for the
+    provided `date` (YYYY-MM-DD). It then calls the Gemini helper to format or
+    enrich those details. Temperature fields are explicitly excluded from the
+    generative output.
+    """
+    try:
+        # Validate and load dataset
+        daily_data_path = project_root / "dataset/hn_daily.csv"
+        if not daily_data_path.exists():
+            raise HTTPException(status_code=404, detail="Daily dataset not found")
+
+        df = pd.read_csv(daily_data_path, parse_dates=["datetime"])
+        # Normalize date string
+        try:
+            query_date = pd.to_datetime(date).date()
+        except Exception:
+            raise HTTPException(status_code=400, detail="`date` must be in YYYY-MM-DD format")
+
+        # Find the row with matching date
+        df['date_only'] = pd.to_datetime(df['datetime']).dt.date
+        row = df[df['date_only'] == query_date]
+        if row.empty:
+            raise HTTPException(status_code=404, detail=f"No record found for date {date}")
+
+        # Use the first match
+        record = row.iloc[0].to_dict()
+
+        # Remove temperature-related fields before sending to Gemini helper
+        for tkey in ('temp', 'tempmin', 'tempmax'):
+            record.pop(tkey, None)
+
+        details = get_weather_details_via_gemini(date, record)
+
+        return {
+            "status": "success",
+            "date": date,
+            "details": details
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"code": "GEMINI_ERROR", "message": str(e)})
+
+
+@app.get("/api/v1/gemini/hourly_metadata", tags=["Generative"])
+async def gemini_hourly_metadata(datetime: str):
+    """Return non-temperature hourly metadata for the specified datetime (ISO 8601).
+
+    Loads `dataset/hn_hourly.csv`, finds the matching row for the provided
+    `datetime`, strips temperature fields and delegates to the Gemini helper.
+    """
+    try:
+        hourly_data_path = project_root / "dataset/hn_hourly.csv"
+        if not hourly_data_path.exists():
+            raise HTTPException(status_code=404, detail="Hourly dataset not found")
+
+        df = pd.read_csv(hourly_data_path, parse_dates=["datetime"])
+
+        # Parse query datetime
+        try:
+            query_dt = pd.to_datetime(datetime)
+        except Exception:
+            raise HTTPException(status_code=400, detail="`datetime` must be ISO 8601")
+
+        # Find the row matching the provided datetime (allow exact match)
+        row = df[df['datetime'] == query_dt]
+        if row.empty:
+            # If exact match not found, try matching by truncating seconds
+            row = df[df['datetime'].dt.floor('min') == query_dt.floor('min')]
+
+        if row.empty:
+            raise HTTPException(status_code=404, detail=f"No hourly record found for datetime {datetime}")
+
+        record = row.iloc[0].to_dict()
+
+        # Remove temp fields before calling Gemini
+        for tkey in ("temp", "temperature", "tempmin", "tempmax"):
+            record.pop(tkey, None)
+
+        details = get_hourly_metadata_via_gemini(datetime, record)
+
+        return {
+            "status": "success",
+            "datetime": datetime,
+            "details": details
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"code": "GEMINI_HOURLY_ERROR", "message": str(e)})
 
 
 @app.get("/api/v1/models/metadata", tags=["Models"])
@@ -963,6 +1154,123 @@ async def get_models_metadata(model_type: Optional[str] = "all"):
                 "message": f"Error loading model metadata: {str(e)}"
             }
         )
+
+
+# ============================================================================
+# PERFORMANCE ENDPOINTS
+# ============================================================================
+
+@app.get("/api/v1/performance/daily", tags=["Performance"])
+async def get_daily_performance():
+    """Get evaluation metrics for the daily forecast model."""
+    try:
+        metrics_path = project_root / "src/daily_forecast_model/evaluate_results/evaluation_metrics.csv"
+        if not metrics_path.exists():
+            raise HTTPException(status_code=404, detail="Daily performance metrics not found.")
+        
+        df = pd.read_csv(metrics_path)
+        return JSONResponse(content=df.to_dict(orient="records"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/performance/hourly", tags=["Performance"])
+async def get_hourly_performance():
+    """Get evaluation metrics for the hourly forecast model."""
+    try:
+        results_path = project_root / "src/hourly_forecast_model/evaluate_results/evaluation_results.json"
+        if not results_path.exists():
+            raise HTTPException(status_code=404, detail="Hourly performance results not found.")
+        
+        with open(results_path, 'r') as f:
+            data = json.load(f)
+        return JSONResponse(content=data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/performance/daily/plots/{filename}", tags=["Performance"])
+async def get_daily_plot(filename: str):
+    """Get a specific evaluation plot for the daily model."""
+    try:
+        plot_path = project_root / f"src/daily_forecast_model/evaluate_results/plots/{filename}"
+        if not plot_path.exists():
+            raise HTTPException(status_code=404, detail=f"Plot '{filename}' not found.")
+        return FileResponse(plot_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/performance/hourly/plots/{filename}", tags=["Performance"])
+async def get_hourly_plot(filename: str):
+    """Get a specific evaluation plot for the hourly model."""
+    try:
+        plot_path = project_root / f"src/hourly_forecast_model/evaluate_results/plots/{filename}"
+        if not plot_path.exists():
+            raise HTTPException(status_code=404, detail=f"Plot '{filename}' not found.")
+        return FileResponse(plot_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# ADMIN ENDPOINTS (for cronjobs)
+# ============================================================================
+
+class AdminTaskResponse(BaseModel):
+    """Response for admin tasks"""
+    status: str
+    task: str
+    timestamp: str
+    message: str
+    details: Optional[Dict[str, Any]] = None
+
+@app.post("/api/v1/admin/trigger-data-update", response_model=AdminTaskResponse, tags=["Admin"])
+async def trigger_data_update():
+    """
+    **[Admin]** Trigger a data update process.
+    
+    This endpoint should be called periodically (e.g., daily) by a cronjob
+    to fetch the latest weather data and append it to the internal datasets.
+    
+    **Cronjob Example (daily at 1 AM):**
+    ```bash
+    0 1 * * * curl -X POST http://localhost:8000/api/v1/admin/trigger-data-update
+    ```
+    """
+    # In a real application, this would trigger a background task
+    # For now, we'll just return a success message
+    return AdminTaskResponse(
+        status="success",
+        task="data_update",
+        timestamp=datetime.now().isoformat(),
+        message="Data update process triggered successfully.",
+        details={
+            "info": "This is a placeholder. Implement the actual data fetching logic here."
+        }
+    )
+
+@app.post("/api/v1/admin/trigger-retraining", response_model=AdminTaskResponse, tags=["Admin"])
+async def trigger_retraining():
+    """
+    **[Admin]** Trigger the model retraining pipeline.
+    
+    This endpoint should be called periodically (e.g., weekly or monthly) 
+    by a cronjob to retrain the models with the latest data.
+    
+    **Cronjob Example (every Sunday at 2 AM):**
+    ```bash
+    0 2 * * 0 curl -X POST http://localhost:8000/api/v1/admin/trigger-retraining
+    ```
+    """
+    # In a real application, this would trigger a long-running background task
+    # (e.g., using Celery or FastAPI's BackgroundTasks)
+    return AdminTaskResponse(
+        status="success",
+        task="model_retraining",
+        timestamp=datetime.now().isoformat(),
+        message="Model retraining process triggered successfully.",
+        details={
+            "info": "This is a placeholder. Implement the actual retraining logic here."
+        }
+    )
 
 
 # ============================================================================
