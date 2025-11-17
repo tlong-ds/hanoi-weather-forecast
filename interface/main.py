@@ -25,29 +25,38 @@ def fetch_weather_data_from_api():
     Returns a DataFrame with combined historical and forecast data.
     """
     try:
-        # Fetch historical data from API
-        historical_endpoint = f"{API_URL}/api/v1/data/historical"
-        hist_response = requests.get(
-            historical_endpoint,
-            params={"days": 90},  # Get last 90 days
-            timeout=10
-        )
+        # Normalize API_URL (remove trailing slash if present)
+        api_base = API_URL.rstrip('/')
         
+        # Fetch historical data from API
         historical_df = pd.DataFrame()
-        if hist_response.status_code == 200:
-            hist_data = hist_response.json()
-            if hist_data.get('status') == 'success':
-                records = hist_data.get('records', [])
-                historical_df = pd.DataFrame(records)
-                if not historical_df.empty:
+        historical_endpoint = f"{api_base}/api/v1/data/historical"
+        
+        try:
+            hist_response = requests.get(
+                historical_endpoint,
+                params={"days": 90},
+                timeout=15
+            )
+            
+            if hist_response.status_code == 200:
+                hist_data = hist_response.json()
+                if hist_data.get('status') == 'success' and hist_data.get('records'):
+                    records = hist_data['records']
+                    historical_df = pd.DataFrame(records)
                     historical_df['datetime'] = pd.to_datetime(historical_df['datetime'])
                     historical_df['is_forecast'] = False
                     historical_df.set_index('datetime', inplace=True)
-        else:
-            st.warning("⚠️ Could not fetch historical data from API")
+                    print(f"✅ Loaded {len(historical_df)} days of historical data from API")
+            else:
+                st.warning(f"⚠️ Historical data API returned status {hist_response.status_code}")
+        except requests.exceptions.RequestException as e:
+            st.warning(f"⚠️ Could not fetch historical data: {str(e)}")
         
-        # Call the daily forecast API endpoint
-        endpoint = f"{API_URL}/api/v1/forecast/daily"
+        # Fetch forecast from API
+        endpoint = f"{api_base}/api/v1/forecast/daily"
+        print(f"🔄 Calling API: {endpoint}")
+        
         response = requests.post(
             endpoint,
             json={"location": "Hanoi, Vietnam", "include_confidence": True},
@@ -55,35 +64,53 @@ def fetch_weather_data_from_api():
         )
         
         if response.status_code != 200:
-            st.error(f"API Error: {response.status_code} - {response.text}")
+            error_msg = f"API Error: {response.status_code}"
+            try:
+                error_detail = response.json()
+                st.error(f"❌ {error_msg} - {error_detail}")
+            except:
+                st.error(f"❌ {error_msg} - {response.text}")
+            
+            # Return historical data only if API fails
+            if not historical_df.empty:
+                st.info("📊 Using historical data only (API unavailable)")
+                return historical_df, None
             return None, None
             
         data = response.json()
+        print(f"✅ API Response received with {len(data.get('predictions', []))} predictions")
         
         # Extract predictions
         predictions = data.get('predictions', [])
+        if not predictions:
+            st.warning("⚠️ API returned no predictions")
+            return historical_df if not historical_df.empty else None, data
+        
         reference_date = pd.to_datetime(data.get('reference_date'))
         
-        # Convert predictions to DataFrame
+        # Convert predictions to DataFrame with better default values
         forecast_records = []
         for pred in predictions:
+            temp = pred['temperature']
+            confidence = pred.get('confidence_interval', {})
+            
             forecast_records.append({
                 'datetime': pd.to_datetime(pred['forecast_date']),
-                'temp': pred['temperature'],
-                'tempmax': pred['temperature'] + 2,  # Approximate
-                'tempmin': pred['temperature'] - 2,  # Approximate
-                'conditions': 'Forecast',
+                'temp': temp,
+                'tempmax': confidence.get('upper', temp + 2),
+                'tempmin': confidence.get('lower', temp - 2),
+                'conditions': 'AI Forecast',
                 'icon': 'partly-cloudy-day',
-                'humidity': 70,  # Default values
+                'humidity': 70,
                 'precip': 0,
-                'precipprob': 0,
+                'precipprob': 20,
                 'windspeed': 10,
-                'winddir': 0,
-                'windgust': 12,
-                'sunrise': '06:00',
-                'sunset': '18:00',
+                'winddir': 90,
+                'windgust': 15,
+                'sunrise': '06:00:00',
+                'sunset': '18:00:00',
                 'moonphase': 0.5,
-                'dew': pred['temperature'] - 5,
+                'dew': temp - 5,
                 'precipcover': 0,
                 'preciptype': None,
                 'uvindex': 5,
@@ -95,23 +122,45 @@ def fetch_weather_data_from_api():
         
         forecast_df = pd.DataFrame(forecast_records)
         forecast_df.set_index('datetime', inplace=True)
+        print(f"✅ Created forecast DataFrame with {len(forecast_df)} rows")
         
         # Combine historical and forecast
         if not historical_df.empty:
             combined_df = pd.concat([historical_df, forecast_df])
             combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
             combined_df = combined_df.sort_index()
+            print(f"✅ Combined data: {len(historical_df)} historical + {len(forecast_df)} forecast = {len(combined_df)} total")
         else:
             combined_df = forecast_df
+            print(f"✅ Using forecast data only: {len(combined_df)} rows")
         
         return combined_df, data
         
+    except requests.exceptions.ConnectionError as e:
+        st.error(f"❌ Cannot connect to API at {API_URL}")
+        st.info("💡 Make sure the API server is running: python api/api.py")
+        if not historical_df.empty:
+            st.info("📊 Using historical data only")
+            return historical_df, None
+        return None, None
+    except requests.exceptions.Timeout:
+        st.error(f"❌ API request timeout (>10s)")
+        if not historical_df.empty:
+            st.info("📊 Using historical data only")
+            return historical_df, None
+        return None, None
     except requests.exceptions.RequestException as e:
-        st.error(f"❌ Cannot connect to API at {API_URL}: {str(e)}")
-        st.info("💡 Make sure the API server is running on http://localhost:8000")
+        st.error(f"❌ API request failed: {str(e)}")
+        if not historical_df.empty:
+            st.info("📊 Using historical data only")
+            return historical_df, None
         return None, None
     except Exception as e:
-        st.error(f"❌ Error processing API data: {str(e)}")
+        st.error(f"❌ Error processing data: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+        if not historical_df.empty:
+            return historical_df, None
         return None, None
 
 @st.cache_data(ttl=3600)  # Cache for 1 hour
@@ -121,8 +170,11 @@ def fetch_hourly_data_from_api():
     Returns a DataFrame with hourly forecast data.
     """
     try:
+        # Normalize API_URL (remove trailing slash if present)
+        api_base = API_URL.rstrip('/')
+        
         # Call the hourly forecast API endpoint
-        endpoint = f"{API_URL}/api/v1/forecast/hourly"
+        endpoint = f"{api_base}/api/v1/forecast/hourly"
         response = requests.post(
             endpoint,
             json={"location": "Hanoi, Vietnam", "include_confidence": False},
@@ -168,7 +220,30 @@ def fetch_hourly_data_from_api():
 
 # Fetch data from API
 weather_df, api_response = fetch_weather_data_from_api()
-hourly_df = fetch_hourly_data_from_api()
+
+# Try to load hourly data from CSV with multiple paths
+hourly_df = pd.DataFrame()
+hourly_csv_paths = [
+    r"C:\Users\PHUC\Downloads\DSEB_NEU\HK5\Machine Learning 1\Project ML\machine_learning_lab\dataset\hn_hourly.csv",
+    "dataset/hn_hourly.csv",
+    "../dataset/hn_hourly.csv",
+    "../../dataset/hn_hourly.csv"
+]
+
+for hourly_path in hourly_csv_paths:
+    try:
+        hourly_df = pd.read_csv(hourly_path, parse_dates=["datetime"])
+        hourly_df['datetime'] = pd.to_datetime(hourly_df['datetime'])
+        hourly_df = hourly_df.set_index('datetime')
+        print(f"✅ Loaded hourly data from: {hourly_path}")
+        break
+    except (FileNotFoundError, Exception):
+        continue
+
+if hourly_df.empty:
+    print("⚠️ Could not load hourly data from CSV")
+    # Try to fetch from API as fallback
+    hourly_df = fetch_hourly_data_from_api()
 
 # CONFIGURATION
 # ========================================
@@ -765,4 +840,4 @@ def set_bg_from_local(bg_file):
     )
 
 # --- Thêm background ---
-set_bg_from_local(bg_path)
+# set_bg_from_local(bg_path)

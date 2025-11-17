@@ -346,13 +346,26 @@ async def get_historical_data(days: int = 30):
         # Get last N days
         df = df.head(days).sort_values('datetime', ascending=True)
         
+        # Replace NaN and Inf values with None for JSON serialization
+        df = df.replace([np.nan, np.inf, -np.inf], None)
+        
         # Convert to records
         records = df.to_dict('records')
         
-        # Convert datetime to string
+        # Convert datetime to string and clean up values
         for record in records:
             if isinstance(record.get('datetime'), pd.Timestamp):
                 record['datetime'] = record['datetime'].strftime('%Y-%m-%d')
+            
+            # Ensure all numeric values are JSON-compliant
+            for key, value in record.items():
+                if value is None:
+                    continue
+                if isinstance(value, (np.integer, np.floating)):
+                    if np.isnan(value) or np.isinf(value):
+                        record[key] = None
+                    else:
+                        record[key] = float(value) if isinstance(value, np.floating) else int(value)
         
         return {
             "status": "success",
