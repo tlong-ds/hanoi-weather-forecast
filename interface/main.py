@@ -25,6 +25,27 @@ def fetch_weather_data_from_api():
     Returns a DataFrame with combined historical and forecast data.
     """
     try:
+        # Fetch historical data from API
+        historical_endpoint = f"{API_URL}/api/v1/data/historical"
+        hist_response = requests.get(
+            historical_endpoint,
+            params={"days": 90},  # Get last 90 days
+            timeout=10
+        )
+        
+        historical_df = pd.DataFrame()
+        if hist_response.status_code == 200:
+            hist_data = hist_response.json()
+            if hist_data.get('status') == 'success':
+                records = hist_data.get('records', [])
+                historical_df = pd.DataFrame(records)
+                if not historical_df.empty:
+                    historical_df['datetime'] = pd.to_datetime(historical_df['datetime'])
+                    historical_df['is_forecast'] = False
+                    historical_df.set_index('datetime', inplace=True)
+        else:
+            st.warning("⚠️ Could not fetch historical data from API")
+        
         # Call the daily forecast API endpoint
         endpoint = f"{API_URL}/api/v1/forecast/daily"
         response = requests.post(
@@ -74,16 +95,6 @@ def fetch_weather_data_from_api():
         
         forecast_df = pd.DataFrame(forecast_records)
         forecast_df.set_index('datetime', inplace=True)
-        
-        # Try to load historical data from CSV as fallback
-        try:
-            historical_df = pd.read_csv("dataset/hn_daily.csv", parse_dates=["datetime"])
-            historical_df['datetime'] = pd.to_datetime(historical_df['datetime'])
-            historical_df['is_forecast'] = False
-            historical_df.set_index('datetime', inplace=True)
-        except FileNotFoundError:
-            st.warning("⚠️ Historical data file not found. Showing forecast only.")
-            historical_df = pd.DataFrame()
         
         # Combine historical and forecast
         if not historical_df.empty:
