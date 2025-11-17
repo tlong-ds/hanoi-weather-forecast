@@ -9,6 +9,9 @@ from src.hourly_forecast_model.helper import (
     PROJECT_ROOT, MODELS_DIR, N_STEPS_AHEAD, TARGET_COLUMNS
 )
 
+# Import PerHorizonWrapper to enable unpickling models trained with per-horizon approach
+from src.hourly_forecast_model.train import PerHorizonWrapper
+
 # Import feature engineering functions for unpickling
 from src.hourly_forecast_model.process import (
     OutlierClipper,
@@ -16,9 +19,7 @@ from src.hourly_forecast_model.process import (
     create_lag_features,
     create_rolling_features,
     create_interaction_features,
-    create_seasonal_indicators,
     create_day_length_feature,
-    create_cyclical_wind_direction,
     LAG_PERIODS_HOURS,
     ROLLING_WINDOWS_HOURS
 )
@@ -55,17 +56,34 @@ class HourlyWeatherForecaster:
         """Load trained multi-output model."""
         print("Loading trained multi-output model...")
         
+        # Try per-horizon model first (priority 1)
         model_path = os.path.join(MODELS_DIR, 'model_multioutput_24h.joblib')
+        
+        if not os.path.exists(model_path):
+            # Fallback: try legacy model path
+            legacy_path = os.path.join(MODELS_DIR, 'model_multioutput.joblib')
+            if os.path.exists(legacy_path):
+                model_path = legacy_path
+            else:
+                raise FileNotFoundError(
+                    f"Multi-output model not found. Please train the model first:\n"
+                    f"  python -m src.hourly_forecast_model.train\n"
+                    f"Expected path: {model_path}"
+                )
         
         try:
             self.model = joblib.load(model_path)
             print(f"  ✓ Model loaded: {model_path}")
-        except FileNotFoundError:
-            print(f"  ✗ Model not found at {model_path}")
-            raise FileNotFoundError(
-                f"Multi-output model not found. Please train the model first:\n"
-                f"  python -m src.hourly_forecast_model.train"
-            )
+            
+            # Check if it's per-horizon or single architecture
+            if isinstance(self.model, PerHorizonWrapper):
+                print(f"  ✓ Using per-horizon model (24 specialized models)")
+            else:
+                print(f"  ✓ Using single architecture model")
+                
+        except Exception as e:
+            print(f"  ✗ Error loading model: {e}")
+            raise
         
         print(f"✓ Model loaded successfully\n")
     
@@ -127,26 +145,20 @@ class HourlyWeatherForecaster:
             else:
                 raise ValueError("Data must have datetime index or 'datetime' column")
         
-        # Step 1: Create temporal features
+        # Step 1: Create temporal features (includes seasonal indicators and cyclical encoding)
         df = create_temporal_features(df)
         
         # Step 2: Create day length feature
         df = create_day_length_feature(df)
         
-        # Step 3: Create cyclical wind direction
-        df = create_cyclical_wind_direction(df)
-        
-        # Step 4: Create seasonal indicators
-        df = create_seasonal_indicators(df)
-        
-        # Step 5: Create interaction features
+        # Step 3: Create interaction features
         df = create_interaction_features(df)
         
-        # Step 6: Create lag features (hourly: 1h, 3h, 6h, 12h, 24h)
-        df = create_lag_features(df, lag_config=LAG_PERIODS_HOURS)
+        # Step 4: Create lag features (hourly: 1h, 3h, 6h, 12h, 24h)
+        df = create_lag_features(df)
         
-        # Step 7: Create rolling window features
-        df = create_rolling_features(df, windows=ROLLING_WINDOWS_HOURS)
+        # Step 5: Create rolling window features
+        df = create_rolling_features(df)
         
         # Drop NaN rows (created by lag/rolling features)
         df = df.dropna()
