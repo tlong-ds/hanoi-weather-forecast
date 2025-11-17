@@ -1,0 +1,33 @@
+{
+  "training_type": "per_horizon",
+  "n_targets": 24,
+  "n_features": 30,
+  "n_samples": 80089,
+  "average_tuned_rmse": 1.5653541666666666,
+  "models_per_horizon": {
+    "t+1h": "LightGBM",
+    "t+2h": "LightGBM",
+    "t+3h": "CatBoost",
+    "t+4h": "LightGBM",
+    "t+5h": "CatBoost",
+    "t+6h": "CatBoost",
+    "t+7h": "CatBoost",
+    "t+8h": "CatBoost",
+    "t+9h": "CatBoost",
+    "t+10h": "CatBoost",
+    "t+11h": "CatBoost",
+    "t+12h": "CatBoost",
+    "t+13h": "CatBoost",
+    "t+14h": "XGBoost",
+    "t+15h": "LightGBM",
+    "t+16h": "XGBoost",
+    "t+17h": "LightGBM",
+    "t+18h": "CatBoost",
+    "t+19h": "CatBoost",
+    "t+20h": "CatBoost",
+    "t+21h": "CatBoost",
+    "t+22h": "CatBoost",
+    "t+23h": "CatBoost",
+    "t+24h": "CatBoost"
+  }
+}

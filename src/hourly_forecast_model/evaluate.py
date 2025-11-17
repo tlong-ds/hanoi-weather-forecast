@@ -12,6 +12,9 @@ from src.hourly_forecast_model.helper import (
     load_data
 )
 
+# Import PerHorizonWrapper to enable unpickling models trained with per-horizon approach
+from src.hourly_forecast_model.train import PerHorizonWrapper
+
 # Evaluation results directory
 EVALUATE_RESULTS_DIR = os.path.join(PROJECT_ROOT, 'src', 'hourly_forecast_model', 'evaluate_results')
 
@@ -233,6 +236,100 @@ def plot_metrics_comparison(results, save_dir):
     plt.close()
 
 
+def plot_time_series_predictions(results, save_dir, n_samples=500):
+    """
+    Plot time series comparison of predictions vs actuals for multiple horizons.
+    Shows temperature fluctuations over time to visualize model performance.
+    
+    Args:
+        results: Evaluation results dictionary
+        save_dir: Directory to save plots
+        n_samples: Number of samples to plot (default 500 for clarity)
+    """
+    # Select representative horizons to plot
+    horizons_to_plot = ['t+1h', 't+6h', 't+12h', 't+18h', 't+24h']
+    
+    # Create multi-panel plot
+    fig, axes = plt.subplots(len(horizons_to_plot), 1, figsize=(16, 12))
+    
+    for idx, hour_name in enumerate(horizons_to_plot):
+        hour_results = results['per_hour'][hour_name]
+        y_test = hour_results['actuals'][:n_samples]
+        y_pred = hour_results['predictions'][:n_samples]
+        metrics = hour_results['metrics']
+        
+        ax = axes[idx]
+        
+        # Plot actual and predicted values
+        x = np.arange(len(y_test))
+        ax.plot(x, y_test, label='Actual', color='#2E86AB', linewidth=1.5, alpha=0.8)
+        ax.plot(x, y_pred, label='Predicted', color='#A23B72', linewidth=1.5, alpha=0.8, linestyle='--')
+        
+        # Fill area between predictions and actuals to show errors
+        ax.fill_between(x, y_test, y_pred, alpha=0.2, color='gray')
+        
+        # Styling
+        ax.set_ylabel('Temperature (°C)', fontsize=10)
+        ax.set_title(f'{hour_name} - RMSE: {metrics["RMSE"]:.4f}°C, R²: {metrics["R2"]:.4f}', 
+                     fontsize=11, fontweight='bold')
+        ax.legend(loc='upper right', fontsize=9)
+        ax.grid(True, alpha=0.3, linestyle=':', linewidth=0.5)
+        
+        # Only show x-label on bottom plot
+        if idx == len(horizons_to_plot) - 1:
+            ax.set_xlabel('Sample Index', fontsize=10)
+    
+    plt.suptitle('Hourly Temperature Forecast: Time Series Comparison\n(Predictions vs Actuals)', 
+                 fontsize=14, fontweight='bold', y=0.995)
+    plt.tight_layout(rect=[0, 0, 1, 0.99])
+    
+    save_path = os.path.join(save_dir, f'time_series_predictions.{PLOT_FORMAT}')
+    if SAVE_PLOTS:
+        plt.savefig(save_path, dpi=PLOT_DPI, format=PLOT_FORMAT, bbox_inches='tight')
+        if VERBOSE_EVALUATION:
+            print(f"  ✓ Time series plot saved: {save_path}")
+    
+    plt.close()
+    
+    # Create detailed single-horizon plot for t+1h (highest frequency fluctuations)
+    fig, ax = plt.subplots(figsize=(18, 6))
+    
+    hour_name = 't+1h'
+    hour_results = results['per_hour'][hour_name]
+    y_test = hour_results['actuals'][:n_samples]
+    y_pred = hour_results['predictions'][:n_samples]
+    metrics = hour_results['metrics']
+    
+    x = np.arange(len(y_test))
+    ax.plot(x, y_test, label='Actual Temperature', color='#2E86AB', linewidth=2, marker='o', 
+            markersize=3, alpha=0.7)
+    ax.plot(x, y_pred, label='Predicted Temperature', color='#A23B72', linewidth=2, marker='s', 
+            markersize=3, alpha=0.7, linestyle='--')
+    
+    # Calculate and plot error bars
+    errors = np.abs(y_test - y_pred)
+    ax.fill_between(x, y_test - errors, y_test + errors, alpha=0.15, color='red', 
+                     label='Prediction Error Range')
+    
+    ax.set_xlabel('Time Steps', fontsize=12)
+    ax.set_ylabel('Temperature (°C)', fontsize=12)
+    ax.set_title(f'Detailed Time Series: 1-Hour Ahead Forecast\n'
+                 f'RMSE: {metrics["RMSE"]:.4f}°C | MAE: {metrics["MAE"]:.4f}°C | R²: {metrics["R2"]:.4f}',
+                 fontsize=14, fontweight='bold')
+    ax.legend(loc='best', fontsize=10, framealpha=0.9)
+    ax.grid(True, alpha=0.3, linestyle=':', linewidth=0.7)
+    
+    plt.tight_layout()
+    
+    save_path = os.path.join(save_dir, f'time_series_detailed_t1h.{PLOT_FORMAT}')
+    if SAVE_PLOTS:
+        plt.savefig(save_path, dpi=PLOT_DPI, format=PLOT_FORMAT, bbox_inches='tight')
+        if VERBOSE_EVALUATION:
+            print(f"  ✓ Detailed time series plot saved: {save_path}")
+    
+    plt.close()
+
+
 def save_evaluation_results(results):
     """Save evaluation results to JSON file."""
     # Convert results to serializable format
@@ -285,6 +382,9 @@ def main():
     
     # Save metrics comparison plot
     plot_metrics_comparison(results, PLOTS_DIR)
+    
+    # Save time series plots showing temperature fluctuations
+    plot_time_series_predictions(results, PLOTS_DIR)
     
     # Save results
     print(f"\n{'='*70}")
