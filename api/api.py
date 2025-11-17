@@ -18,9 +18,12 @@ import json
 import sys
 from pathlib import Path
 import time
+import pandas as pd
+import numpy as np
 
-# Add project root to path
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).parent
+if project_root.name == '':  # Handle case where parent is root
+    project_root = Path('/app')
 sys.path.insert(0, str(project_root))
 
 # Import ClearML for production monitoring
@@ -44,13 +47,18 @@ from src.daily_forecast_model.process import (
     create_interaction_features
 )
 
-# CRITICAL FIX: Make OutlierClipper available in __main__ namespace
+# Import hourly model wrapper
+from src.hourly_forecast_model.train import PerHorizonWrapper
+
+# CRITICAL FIX: Make custom classes available in __main__ namespace
 # The preprocessors were pickled with __main__ as the module reference
 import __main__
 __main__.OutlierClipper = OutlierClipper
+__main__.PerHorizonWrapper = PerHorizonWrapper
 
-# Import forecaster
+# Import forecasters
 from src.daily_forecast_model.infer import WeatherForecaster
+from src.hourly_forecast_model.infer import HourlyWeatherForecaster
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -72,6 +80,7 @@ app.add_middleware(
 
 # Global model instances
 daily_forecaster = None
+hourly_forecaster = None
 evaluation_metrics = None
 
 # ClearML monitoring
@@ -85,7 +94,7 @@ clearml_logger = None
 @app.on_event("startup")
 async def startup_event():
     """Load models and evaluation metrics at startup"""
-    global daily_forecaster, evaluation_metrics, clearml_task, clearml_logger
+    global daily_forecaster, hourly_forecaster, evaluation_metrics, clearml_task, clearml_logger
     
     try:
         # Initialize ClearML monitoring for production
@@ -114,6 +123,15 @@ async def startup_event():
         print("🔄 Loading daily forecaster...")
         daily_forecaster = WeatherForecaster()
         print(f"✅ Daily forecaster loaded successfully with {len(daily_forecaster.models)} models")
+        
+        # Load hourly forecaster
+        print("🔄 Loading hourly forecaster...")
+        try:
+            hourly_forecaster = HourlyWeatherForecaster()
+            print(f"✅ Hourly forecaster loaded successfully")
+        except Exception as e:
+            print(f"⚠️  Hourly forecaster not available: {e}")
+            hourly_forecaster = None
         
         # Load evaluation metrics
         eval_path = project_root / "src/daily_forecast_model/evaluate_results/evaluation_results.json"
@@ -305,6 +323,60 @@ async def root():
     }
 
 
+@app.get("/api/v1/data/historical", tags=["Data"])
+async def get_historical_data(days: int = 30):
+    """
+    Get historical weather data
+    
+    Args:
+        days: Number of days of historical data to return (default: 30, max: 365)
+    
+    Returns:
+        Historical weather data in JSON format
+    """
+    try:
+        # Limit days to prevent excessive data transfer
+        days = min(days, 365)
+        
+        # Load historical data
+        daily_data_path = project_root / "dataset/hn_daily.csv"
+        df = pd.read_csv(daily_data_path, parse_dates=['datetime'])
+        df = df.sort_values('datetime', ascending=False)
+        
+        # Get last N days
+        df = df.head(days).sort_values('datetime', ascending=True)
+        
+        # Convert to records
+        records = df.to_dict('records')
+        
+        # Convert datetime to string
+        for record in records:
+            if isinstance(record.get('datetime'), pd.Timestamp):
+                record['datetime'] = record['datetime'].strftime('%Y-%m-%d')
+        
+        return {
+            "status": "success",
+            "data_type": "historical",
+            "total_records": len(records),
+            "date_range": {
+                "start": records[0]['datetime'] if records else None,
+                "end": records[-1]['datetime'] if records else None
+            },
+            "records": records
+        }
+        
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="Historical data file not found"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error loading historical data: {str(e)}"
+        )
+
+
 @app.get("/api/v1/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
     """
@@ -322,9 +394,9 @@ async def health_check():
             "models": list(daily_forecaster.models.keys()) if daily_forecaster else []
         },
         "hourly": {
-            "status": "not_implemented",
-            "count": 0,
-            "models": []
+            "status": "loaded" if hourly_forecaster else "not_loaded",
+            "count": 24 if hourly_forecaster else 0,
+            "models": [f"t+{i}h" for i in range(1, 25)] if hourly_forecaster else []
         }
     }
     
@@ -573,32 +645,160 @@ async def forecast_hourly(request: HourlyForecastRequest):
     Get 24-hour temperature forecast (h+1 to h+24)
     
     **Requirements:**
-    - Minimum 168 hours (7 days) of historical data
-    - Hourly weather dataset at dataset/hn_hourly.csv
+    - Uses internal hourly dataset (dataset/hn_hourly.csv)
+    - Predicts 24 hours after the last datetime in dataset
     
     **Returns:**
     - Temperature predictions for next 24 hours
-    - Optional: Confidence intervals
+    - Optional: Confidence intervals (±1.96 × RMSE)
     
-    **Status:** Not yet implemented
-    
-    **Next Steps:**
-    1. Implement HourlyForecaster class in src/hourly_forecast_model/infer_hourly.py
-    2. Train hourly models (h+1 to h+24) using preprocessed_hourly.py
-    3. Add evaluation metrics for hourly models
+    **Example Request:**
+    ```json
+    {
+        "location": "Hanoi, Vietnam",
+        "include_confidence": true,
+        "hours_ahead": 24
+    }
+    ```
     """
-    raise HTTPException(
-        status_code=501,
-        detail={
-            "code": "NOT_IMPLEMENTED",
-            "message": "Hourly forecasting not yet implemented",
-            "details": {
-                "available_endpoint": "/api/v1/forecast/daily",
-                "status": "Use daily forecast endpoint for now",
-                "roadmap": "Hourly forecasting scheduled for implementation"
+    # Check if hourly forecaster is available
+    if not hourly_forecaster:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "SERVICE_UNAVAILABLE",
+                "message": "Hourly forecasting model not loaded",
+                "details": {
+                    "available_endpoint": "/api/v1/forecast/daily",
+                    "status": "Hourly model not initialized at startup"
+                }
             }
-        }
-    )
+        )
+    
+    try:
+        start_time = time.time()
+        
+        # Load hourly historical data from internal dataset
+        hourly_data_path = project_root / "dataset/hn_hourly.csv"
+        if not hourly_data_path.exists():
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "DATA_NOT_FOUND",
+                    "message": "Internal hourly dataset not found",
+                    "details": {"expected_path": str(hourly_data_path)}
+                }
+            )
+        
+        # Load all available data
+        df_hourly = pd.read_csv(hourly_data_path)
+        df_hourly['datetime'] = pd.to_datetime(df_hourly['datetime'])
+        df_hourly = df_hourly.sort_values('datetime').reset_index(drop=True)
+        
+        # Check minimum data requirement (168 hours = 7 days)
+        if len(df_hourly) < 168:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "INSUFFICIENT_DATA",
+                    "message": f"Internal dataset has insufficient data: need at least 168 hours, got {len(df_hourly)}",
+                    "details": {"min_required": 168, "available": len(df_hourly)}
+                }
+            )
+        
+        # Get reference datetime (last datetime in dataset)
+        reference_datetime = df_hourly['datetime'].iloc[-1]
+        
+        # Get predictions from forecaster
+        results_df = hourly_forecaster.predict(df_hourly)
+        
+        # Format predictions
+        predictions = []
+        for _, row in results_df.iterrows():
+            pred = HourlyPrediction(
+                target=row['hour_name'],
+                forecast_datetime=row['timestamp'].isoformat(),
+                temperature=round(row['predicted_temp'], 1),
+                unit="celsius"
+            )
+            
+            # Add confidence intervals if requested
+            if request.include_confidence:
+                # Use approximate RMSE from hourly model evaluation
+                # Average RMSE across 24-hour horizons
+                approx_rmse = 1.6
+                pred.confidence_interval = calculate_confidence_interval(
+                    pred.temperature, 
+                    approx_rmse
+                )
+            
+            predictions.append(pred)
+        
+        # Filter by hours_ahead if specified
+        if request.hours_ahead and request.hours_ahead < 24:
+            predictions = predictions[:request.hours_ahead]
+        
+        # Calculate metadata
+        metadata = ForecastMetadata(
+            total_predictions=len(predictions),
+            average_confidence=None,
+            data_requirements={
+                "minimum_historical_hours": 168,
+                "data_available": len(df_hourly),
+                "latest_data_datetime": reference_datetime.isoformat()
+            }
+        )
+        
+        # Calculate inference time
+        inference_time = (time.time() - start_time) * 1000  # Convert to ms
+        
+        # Log to ClearML
+        if clearml_logger:
+            clearml_logger.report_scalar(
+                title="Production Metrics",
+                series="hourly_inference_latency_ms",
+                value=inference_time,
+                iteration=clearml_task.get_last_iteration()
+            )
+            
+            clearml_logger.report_scalar(
+                title="Production Metrics",
+                series="hourly_prediction_requests",
+                value=1,
+                iteration=clearml_task.get_last_iteration()
+            )
+        
+        return HourlyForecastResponse(
+            status="success",
+            forecast_type="hourly",
+            location=request.location,
+            reference_datetime=reference_datetime.isoformat(),
+            generated_at=datetime.now().isoformat(),
+            model_version="v1.0.0-hourly",
+            predictions=predictions,
+            metadata=metadata
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Log error to ClearML
+        if clearml_logger:
+            clearml_logger.report_scalar(
+                title="Production Metrics",
+                series="hourly_prediction_errors",
+                value=1,
+                iteration=clearml_task.get_last_iteration()
+            )
+        
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "PREDICTION_ERROR",
+                "message": f"Failed to generate hourly forecast: {str(e)}",
+                "details": {"error_type": type(e).__name__}
+            }
+        )
 
 
 @app.get("/api/v1/models/metadata", tags=["Models"])
