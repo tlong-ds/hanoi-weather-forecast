@@ -52,7 +52,7 @@ def load_best_config():
     """Load best model configuration from tuning results."""
     # Try to load per-horizon parameters first (from two-stage tuning)
     per_horizon_file = os.path.join(PROJECT_ROOT, 'src', 'hourly_forecast_model', 
-                                    'final', 'best_params_per_horizon.json')
+                                    'tuning_results', 'best_params_per_horizon.json')
     
     if os.path.exists(per_horizon_file):
         try:
@@ -67,7 +67,7 @@ def load_best_config():
     # FUTURE: Uncomment to use single best architecture for all horizons
     # This uses the architecture from Stage 1 of two-stage tuning
     # architecture_file = os.path.join(PROJECT_ROOT, 'src', 'hourly_forecast_model',
-    #                                  'final', 'architecture_selection.json')
+    #                                  'tuning_results', 'architecture_selection.json')
     # if os.path.exists(architecture_file):
     #     try:
     #         with open(architecture_file, 'r') as f:
@@ -85,7 +85,7 @@ def load_best_config():
     
     # Fallback to single best model config (from multi-output tuning)
     config_file = os.path.join(PROJECT_ROOT, 'src', 'hourly_forecast_model', 
-                               'final', 'best_model_config.json')
+                               'tuning_results', 'best_model_config.json')
     
     try:
         with open(config_file, 'r') as f:

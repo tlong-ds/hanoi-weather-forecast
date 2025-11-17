@@ -297,10 +297,10 @@ if __name__ == "__main__":
         "best_params": study1.best_params
     }
     
-    os.makedirs('src/daily_forecast_model/final', exist_ok=True)
-    with open('src/daily_forecast_model/final/architecture_selection.json', 'w') as f:
+    os.makedirs('src/daily_forecast_model/tuning_results', exist_ok=True)
+    with open('src/daily_forecast_model/tuning_results/best_params_per_target.json', 'w') as f:
         json.dump(stage1_results, f, indent=2)
-    print(f"\n✅ Stage 1 results saved to 'src/daily_forecast_model/final/architecture_selection.json'")
+    print(f"\n✅ Stage 1 results saved to 'src/daily_forecast_model/tuning_results/architecture_selection.json'")
     
     
     # ========== STAGE 2: DEEP PER-TARGET TUNING ==========
@@ -379,7 +379,7 @@ if __name__ == "__main__":
         }
     
     # Save Stage 2 results
-    with open('src/daily_forecast_model/final/best_params_per_target.json', 'w') as f:
+    with open('src/daily_forecast_model/tuning_results/best_params_per_target.json', 'w') as f:
         json.dump(best_params_all_targets, f, indent=2)
     
     print("\n" + "="*70)
@@ -393,8 +393,8 @@ if __name__ == "__main__":
         print(f"  {target}: RMSE={info['best_rmse']:.4f} ({info['feature_type']}, {info['n_features']} features)")
     
     print("\n📁 Results saved:")
-    print("  - src/daily_forecast_model/final/architecture_selection.json")
-    print("  - src/daily_forecast_model/final/best_params_per_target.json")
+    print("  - src/daily_forecast_model/tuning_results/architecture_selection.json")
+    print("  - src/daily_forecast_model/tuning_results/best_params_per_target.json")
     print("="*70)
     print("🎉 All results logged to ClearML!")
     print("="*70)

@@ -20,7 +20,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 
 # Paths relative to project root
 DATA_DIR = os.path.join(PROJECT_ROOT, 'processed_data')
-MODELS_DIR = os.path.join(PROJECT_ROOT, 'trained_models')
+MODELS_DIR = os.path.join(PROJECT_ROOT, 'src', 'daily_forecast_model', 'final_model')
 
 # Ensure directories exist
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -72,7 +72,7 @@ def load_model_config_from_results():
     """
     # Try new two-stage tuning results first
     try:
-        results_path = os.path.join(PROJECT_ROOT, 'src', 'daily_forecast_model', 'final', 'best_params_per_target.json')
+        results_path = os.path.join(PROJECT_ROOT, 'src', 'daily_forecast_model', 'tuning_results', 'best_params_per_target.json')
         with open(results_path, 'r') as f:
             best_params_per_target = json.load(f)
             
@@ -86,7 +86,7 @@ def load_model_config_from_results():
             representative_target = 't+3' if 't+3' in best_params_per_target else list(best_params_per_target.keys())[0]
             params = best_params_per_target[representative_target]['params']
             
-            print(f"✓ Loaded per-target optimized configurations from src/daily_forecast_model/final/best_params_per_target.json")
+            print(f"✓ Loaded per-target optimized configurations from src/daily_forecast_model/tuning_results/best_params_per_target.json")
             print(f"  Model architecture: {model_name}")
             print(f"  Per-target params available for: {', '.join(best_params_per_target.keys())}")
             
@@ -97,13 +97,13 @@ def load_model_config_from_results():
     
     # Try stage 1 results (architecture only, no deep tuning)
     try:
-        results_path = os.path.join(PROJECT_ROOT, 'src', 'daily_forecast_model', 'final', 'architecture_selection.json')
+        results_path = os.path.join(PROJECT_ROOT, 'src', 'daily_forecast_model', 'tuning_results', 'architecture_selection.json')
         with open(results_path, 'r') as f:
             architecture_selection = json.load(f)
             model_name = architecture_selection['best_architecture']
             params = {k: v for k, v in architecture_selection['best_params'].items() if k != 'model_name'}
             
-            print(f"✓ Loaded {model_name} architecture from src/daily_forecast_model/final/architecture_selection.json")
+            print(f"✓ Loaded {model_name} architecture from src/daily_forecast_model/tuning_results/architecture_selection.json")
             print(f"  Note: Using stage 1 params (not deeply optimized). Run stage 2 for better results.")
             
             return model_name, params, None
@@ -131,7 +131,7 @@ def load_model_config_from_results():
         "No tuning results found. Please run tuning first:\n"
         "  1. Execute run_tuning.ipynb in Google Colab, or\n"
         "  2. Run: python src/daily_forecast_model/tune.py\n"
-        "This will generate src/daily_forecast_model/final/best_params_per_target.json and src/daily_forecast_model/final/architecture_selection.json"
+        "This will generate src/daily_forecast_model/tuning_results/best_params_per_target.json and src/daily_forecast_model/tuning_results/architecture_selection.json"
     )
 
 # Load configuration

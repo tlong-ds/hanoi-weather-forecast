@@ -21,7 +21,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 
 # Hourly-specific paths
 DATA_DIR = os.path.join(PROJECT_ROOT, 'data_processing_hourly')
-MODELS_DIR = os.path.join(PROJECT_ROOT, 'trained_models_hourly')
+MODELS_DIR = os.path.join(PROJECT_ROOT, 'src', 'hourly_forecast_model', 'final_model')
 PLOTS_DIR = os.path.join(PROJECT_ROOT, 'src', 'hourly_forecast_model', 'evaluate_results', 'plots')
 
 # Ensure directories exist
@@ -60,8 +60,8 @@ def load_model_config_from_results():
     Load model configuration from tuning results for HOURLY model.
     
     Priority:
-    1. src/hourly_forecast_model/final/best_params_per_target.json (per-target optimized params)
-    2. src/hourly_forecast_model/final/architecture_selection.json (best architecture)
+    1. src/hourly_forecast_model/tuning_results/best_params_per_target.json (per-target optimized params)
+    2. src/hourly_forecast_model/tuning_results/architecture_selection.json (best architecture)
     3. Default configuration
     
     Returns:
@@ -69,7 +69,7 @@ def load_model_config_from_results():
     """
     # Try new two-stage tuning results first
     try:
-        results_path = os.path.join(PROJECT_ROOT, 'src', 'hourly_forecast_model', 'final', 'best_params_per_target.json')
+        results_path = os.path.join(PROJECT_ROOT, 'src', 'hourly_forecast_model', 'tuning_results', 'best_params_per_target.json')
         with open(results_path, 'r') as f:
             best_params_per_target = json.load(f)
             
@@ -81,7 +81,7 @@ def load_model_config_from_results():
             representative_target = 't+12h' if 't+12h' in best_params_per_target else list(best_params_per_target.keys())[0]
             params = best_params_per_target[representative_target]['params']
             
-            print(f"✓ Loaded per-target optimized configurations from src/hourly_forecast_model/final/best_params_per_target.json")
+            print(f"✓ Loaded per-target optimized configurations from src/hourly_forecast_model/tuning_results/best_params_per_target.json")
             print(f"  Model architecture: {model_name}")
             print(f"  Per-target params available for: {', '.join(best_params_per_target.keys())}")
             
@@ -92,13 +92,13 @@ def load_model_config_from_results():
     
     # Try stage 1 results (architecture only)
     try:
-        results_path = os.path.join(PROJECT_ROOT, 'src', 'hourly_forecast_model', 'final', 'architecture_selection.json')
+        results_path = os.path.join(PROJECT_ROOT, 'src', 'hourly_forecast_model', 'tuning_results', 'architecture_selection.json')
         with open(results_path, 'r') as f:
             arch_results = json.load(f)
             model_name = arch_results['best_architecture']
             params = arch_results.get('best_params', {})
             
-            print(f"✓ Loaded architecture selection from src/hourly_forecast_model/final/architecture_selection.json")
+            print(f"✓ Loaded architecture selection from src/hourly_forecast_model/tuning_results/architecture_selection.json")
             print(f"  Best architecture: {model_name}")
             
             return model_name, params, None
