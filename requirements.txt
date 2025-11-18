@@ -16,3 +16,14 @@ google-api-python-client
 fastapi
 uvicorn
 python-dotenv
+torch
+xgboost
+lightgbm
+catboost
+optuna
+onnxruntime
+skl2onnx
+onnxstatsmodels
+plotly
+streamlit
+google-generativeai

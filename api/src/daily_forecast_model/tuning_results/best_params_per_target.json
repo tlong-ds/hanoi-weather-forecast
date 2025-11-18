@@ -1,0 +1,77 @@
+{
+  "t+1": {
+    "model": "CatBoost",
+    "feature_type": "SHORT-TERM",
+    "n_features": 34,
+    "params": {
+      "iterations": 777,
+      "depth": 5,
+      "learning_rate": 0.026258062334984796,
+      "l2_leaf_reg": 1.2300235014118366,
+      "subsample": 0.6024387745307975,
+      "colsample_bylevel": 0.7820411612696558,
+      "min_data_in_leaf": 8
+    },
+    "best_rmse": 1.4886751893405843
+  },
+  "t+2": {
+    "model": "CatBoost",
+    "feature_type": "COMBINED",
+    "n_features": 43,
+    "params": {
+      "iterations": 593,
+      "depth": 3,
+      "learning_rate": 0.061792520222287727,
+      "l2_leaf_reg": 4.658044160279362,
+      "subsample": 0.6070813994504971,
+      "colsample_bylevel": 0.926215567734238,
+      "min_data_in_leaf": 15
+    },
+    "best_rmse": 2.168812543616968
+  },
+  "t+3": {
+    "model": "CatBoost",
+    "feature_type": "COMBINED",
+    "n_features": 43,
+    "params": {
+      "iterations": 792,
+      "depth": 5,
+      "learning_rate": 0.020849514413244518,
+      "l2_leaf_reg": 5.905688270684796,
+      "subsample": 0.8595137080299489,
+      "colsample_bylevel": 0.8534015157647666,
+      "min_data_in_leaf": 36
+    },
+    "best_rmse": 2.497732107202842
+  },
+  "t+4": {
+    "model": "CatBoost",
+    "feature_type": "COMBINED",
+    "n_features": 43,
+    "params": {
+      "iterations": 315,
+      "depth": 3,
+      "learning_rate": 0.03149581529570146,
+      "l2_leaf_reg": 8.20055868341439,
+      "subsample": 0.8557345600023305,
+      "colsample_bylevel": 0.9763530280395869,
+      "min_data_in_leaf": 20
+    },
+    "best_rmse": 2.6179991295180587
+  },
+  "t+5": {
+    "model": "CatBoost",
+    "feature_type": "LONG-TERM",
+    "n_features": 34,
+    "params": {
+      "iterations": 624,
+      "depth": 4,
+      "learning_rate": 0.009412613456268346,
+      "l2_leaf_reg": 1.878838144281242,
+      "subsample": 0.768383312941512,
+      "colsample_bylevel": 0.9856731157358587,
+      "min_data_in_leaf": 30
+    },
+    "best_rmse": 2.6467080219006225
+  }
+}
