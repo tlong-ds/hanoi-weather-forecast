@@ -562,6 +562,74 @@ with left_col:
 
     #======================
     # HOURLY TEMP
+    hourly_today = hourly_df[hourly_df.index.date == selected_date]
+
+    # Icon map
+    icon_map = {
+        'clear-day': '☀️',
+        'clear-night': '🌙',
+        'partly-cloudy-day': '🌤️',
+        'partly-cloudy-night': '⛅',
+        'cloudy': '☁️',
+        'rain': '🌧️',
+        'fog': '🌫️',
+        'wind': '💨'
+    }
+    def icon_from_code(code):
+        return icon_map.get(str(code), "❓")
+
+    # --- Build scroll ngang ---
+    html = '''
+    <div style="
+        display:flex; 
+        overflow-x:auto; 
+        overflow-y:hidden;
+        gap:10px; 
+        padding:10px; 
+        white-space:nowrap;
+        height:120px;">
+    '''
+
+    current_hour = pd.Timestamp.now().hour
+    temp_fallback = hourly_today['temp'].mean() if not hourly_today.empty else 20
+
+    for hour in range(24):
+        row = hourly_today[hourly_today.index.hour == hour] if not hourly_today.empty else None
+        if row is not None and not row.empty:
+            temp = f"{row.iloc[0]['temp']:.0f}°"
+            icon = icon_from_code(row.iloc[0]['icon'])
+        else:
+            temp = f"{temp_fallback:.0f}°"
+            icon = "❓"
+        
+        label = "Now" if hour == current_hour else f"{hour}:00"
+        border = "2px solid #3b82f6" if hour == current_hour else "none"
+        
+        html += f"""
+        <div style="
+            flex:0 0 auto;
+            width:70px; 
+            background:#1e293b; 
+            color:#e2e8f0; 
+            border-radius:12px; 
+            padding:10px; 
+            text-align:center; 
+            border:{border};
+            height:100px;">
+            <div style="font-size:18px; font-weight:bold; color:#3b82f6;">{temp}</div>
+            <div style="font-size:26px; margin:4px 0;">{icon}</div>
+            <div style="font-size:12px; color:#cbd5e1;">{label}</div>
+        </div>
+        """
+
+    html += "</div>"
+
+    st.components.v1.html(html, height=140, scrolling=False)
+
+
+
+    #======================
+    # HOURLY TEMP
     if not hourly_df.empty and hasattr(hourly_df.index, 'date'):
         hourly_today = hourly_df[hourly_df.index.date == selected_date]
     else:
@@ -841,3 +909,4 @@ def set_bg_from_local(bg_file):
 
 # --- Thêm background ---
 # set_bg_from_local(bg_path)
+
