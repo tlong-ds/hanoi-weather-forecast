@@ -10,6 +10,7 @@ st.set_page_config(layout="wide", page_title="Weather Forecast", page_icon="🌤
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import plotly.express as px
 from datetime import datetime, timedelta
 import requests
 import json
@@ -22,23 +23,17 @@ import json
 def fetch_weather_data_from_api():
     """
     Fetch weather data and forecast from API endpoint.
-    Returns a DataFrame with combined historical and forecast data.
+    Returns a DataFrame with combined historical and forecast data and the raw API response.
     """
     try:
-        # Normalize API_URL (remove trailing slash if present)
         api_base = API_URL.rstrip('/')
-        
         # Fetch historical data from API
         historical_df = pd.DataFrame()
         historical_endpoint = f"{api_base}/api/v1/data/historical"
-        
         try:
-            hist_response = requests.get(
-                historical_endpoint,
-                params={"days": 90},
-                timeout=15
-            )
-            
+            # Request full historical dataset (no days limit) so server can decide; this
+            # allows the API to return all records when available.
+            hist_response = requests.get(historical_endpoint, timeout=30)
             if hist_response.status_code == 200:
                 hist_data = hist_response.json()
                 if hist_data.get('status') == 'success' and hist_data.get('records'):
@@ -47,203 +42,168 @@ def fetch_weather_data_from_api():
                     historical_df['datetime'] = pd.to_datetime(historical_df['datetime'])
                     historical_df['is_forecast'] = False
                     historical_df.set_index('datetime', inplace=True)
-                    print(f"✅ Loaded {len(historical_df)} days of historical data from API")
-            else:
-                st.warning(f"⚠️ Historical data API returned status {hist_response.status_code}")
-        except requests.exceptions.RequestException as e:
-            st.warning(f"⚠️ Could not fetch historical data: {str(e)}")
-        
+        except requests.exceptions.RequestException:
+            pass
+
         # Fetch forecast from API
         endpoint = f"{api_base}/api/v1/forecast/daily"
-        print(f"🔄 Calling API: {endpoint}")
-        
         response = requests.post(
             endpoint,
             json={"location": "Hanoi, Vietnam", "include_confidence": True},
             timeout=10
         )
-        
+
         if response.status_code != 200:
-            error_msg = f"API Error: {response.status_code}"
-            try:
-                error_detail = response.json()
-                st.error(f"❌ {error_msg} - {error_detail}")
-            except:
-                st.error(f"❌ {error_msg} - {response.text}")
-            
             # Return historical data only if API fails
             if not historical_df.empty:
-                st.info("📊 Using historical data only (API unavailable)")
                 return historical_df, None
-            return None, None
-            
+            return pd.DataFrame(), None
+
         data = response.json()
-        print(f"✅ API Response received with {len(data.get('predictions', []))} predictions")
-        
-        # Extract predictions
         predictions = data.get('predictions', [])
         if not predictions:
-            st.warning("⚠️ API returned no predictions")
-            return historical_df if not historical_df.empty else None, data
-        
-        reference_date = pd.to_datetime(data.get('reference_date'))
-        
-        # Convert predictions to DataFrame with better default values
+            return (historical_df if not historical_df.empty else pd.DataFrame()), data
+
         forecast_records = []
         for pred in predictions:
-            temp = pred['temperature']
+            temp = pred.get('temperature', np.nan)
             confidence = pred.get('confidence_interval', {})
-            
             forecast_records.append({
-                'datetime': pd.to_datetime(pred['forecast_date']),
+                'datetime': pd.to_datetime(pred.get('forecast_date')),
                 'temp': temp,
-                'tempmax': confidence.get('upper', temp + 2),
-                'tempmin': confidence.get('lower', temp - 2),
-                'conditions': 'AI Forecast',
-                'icon': 'partly-cloudy-day',
-                'humidity': 70,
-                'precip': 0,
-                'precipprob': 20,
-                'windspeed': 10,
-                'winddir': 90,
-                'windgust': 15,
-                'sunrise': '06:00:00',
-                'sunset': '18:00:00',
-                'moonphase': 0.5,
-                'dew': temp - 5,
-                'precipcover': 0,
-                'preciptype': None,
-                'uvindex': 5,
-                'visibility': 10,
-                'cloudcover': 50,
-                'sealevelpressure': 1013,
+                'tempmax': confidence.get('upper', temp + 2 if not pd.isna(temp) else np.nan),
+                'tempmin': confidence.get('lower', temp - 2 if not pd.isna(temp) else np.nan),
+                'conditions': pred.get('conditions', 'AI Forecast'),
+                'icon': pred.get('icon', 'partly-cloudy-day'),
+                'humidity': pred.get('humidity', 70),
+                'precip': pred.get('precip', 0),
+                'precipprob': pred.get('precipprob', 20),
+                'windspeed': pred.get('windspeed', 10),
+                'winddir': pred.get('winddir', 90),
+                'windgust': pred.get('windgust', 15),
+                'sunrise': pred.get('sunrise', '06:00:00'),
+                'sunset': pred.get('sunset', '18:00:00'),
+                'moonphase': pred.get('moonphase', 0.5),
+                'dew': pred.get('dew', temp - 5 if not pd.isna(temp) else np.nan),
+                'precipcover': pred.get('precipcover', 0),
+                'preciptype': pred.get('preciptype', None),
+                'uvindex': pred.get('uvindex', 5),
+                'visibility': pred.get('visibility', 10),
+                'cloudcover': pred.get('cloudcover', 50),
+                'sealevelpressure': pred.get('sealevelpressure', 1013),
                 'is_forecast': True
             })
-        
+
         forecast_df = pd.DataFrame(forecast_records)
-        forecast_df.set_index('datetime', inplace=True)
-        print(f"✅ Created forecast DataFrame with {len(forecast_df)} rows")
-        
-        # Combine historical and forecast
+        if not forecast_df.empty:
+            forecast_df.set_index('datetime', inplace=True)
+
         if not historical_df.empty:
             combined_df = pd.concat([historical_df, forecast_df])
             combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
             combined_df = combined_df.sort_index()
-            print(f"✅ Combined data: {len(historical_df)} historical + {len(forecast_df)} forecast = {len(combined_df)} total")
         else:
             combined_df = forecast_df
-            print(f"✅ Using forecast data only: {len(combined_df)} rows")
-        
-        return combined_df, data
-        
-    except requests.exceptions.ConnectionError as e:
-        st.error(f"❌ Cannot connect to API at {API_URL}")
-        st.info("💡 Make sure the API server is running: python api/api.py")
-        if not historical_df.empty:
-            st.info("📊 Using historical data only")
-            return historical_df, None
-        return None, None
-    except requests.exceptions.Timeout:
-        st.error(f"❌ API request timeout (>10s)")
-        if not historical_df.empty:
-            st.info("📊 Using historical data only")
-            return historical_df, None
-        return None, None
-    except requests.exceptions.RequestException as e:
-        st.error(f"❌ API request failed: {str(e)}")
-        if not historical_df.empty:
-            st.info("📊 Using historical data only")
-            return historical_df, None
-        return None, None
-    except Exception as e:
-        st.error(f"❌ Error processing data: {str(e)}")
-        import traceback
-        st.code(traceback.format_exc())
-        if not historical_df.empty:
-            return historical_df, None
-        return None, None
 
-@st.cache_data(ttl=3600)  # Cache for 1 hour
-def fetch_hourly_data_from_api():
+        return combined_df, data
+    except Exception:
+        return pd.DataFrame(), None
+
+
+@st.cache_data(ttl=3600)
+def fetch_hourly_data_from_api(reference_datetime=None):
     """
     Fetch hourly weather forecast from API endpoint.
     Returns a DataFrame with hourly forecast data.
     """
     try:
-        # Normalize API_URL (remove trailing slash if present)
         api_base = API_URL.rstrip('/')
-        
-        # Call the hourly forecast API endpoint
+        payload = {"location": "Hanoi, Vietnam", "include_confidence": False}
+        if reference_datetime:
+            payload["reference_datetime"] = reference_datetime
         endpoint = f"{api_base}/api/v1/forecast/hourly"
-        response = requests.post(
-            endpoint,
-            json={"location": "Hanoi, Vietnam", "include_confidence": False},
-            timeout=10
-        )
-        
+        response = requests.post(endpoint, json=payload, timeout=60)
         if response.status_code != 200:
-            st.warning(f"Hourly API Error: {response.status_code}")
             return pd.DataFrame()
-            
         data = response.json()
-        
-        # Extract predictions
         predictions = data.get('predictions', [])
-        
         if not predictions:
             return pd.DataFrame()
-        
-        # Convert predictions to DataFrame
         hourly_records = []
         for pred in predictions:
             hourly_records.append({
-                'datetime': pd.to_datetime(pred['forecast_datetime']),
-                'temp': pred['temperature'],
-                'icon': 'partly-cloudy-day',  # Default icon
-                'conditions': 'Forecast',
-                'humidity': 70,  # Default values
-                'windspeed': 10,
+                'datetime': pd.to_datetime(pred.get('forecast_datetime')),
+                'temp': pred.get('temperature', np.nan),
+                'icon': pred.get('icon', 'partly-cloudy-day'),
+                'conditions': pred.get('conditions', 'Forecast'),
+                'humidity': pred.get('humidity', 70),
+                'windspeed': pred.get('windspeed', 10),
             })
-        
         hourly_df = pd.DataFrame(hourly_records)
-        hourly_df.set_index('datetime', inplace=True)
-        hourly_df = hourly_df.sort_index()
-        
+        if not hourly_df.empty:
+            hourly_df.set_index('datetime', inplace=True)
+            hourly_df = hourly_df.sort_index()
         return hourly_df
+    except Exception:
+        return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
+def fetch_historical_hourly_data():
+    """
+    Fetch historical hourly data from API.
+    Returns the last hour of historical data as a DataFrame, or empty DataFrame on failure.
+    """
+    try:
+        api_base = API_URL.rstrip('/')
+        endpoint = f"{api_base}/api/v1/data/historical/hourly"
         
-    except requests.exceptions.RequestException as e:
-        st.warning(f"Cannot fetch hourly data: {str(e)}")
+        response = requests.get(
+            endpoint,
+            params={"hours": 1},  # Get only the last hour
+            timeout=15
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('status') == 'success' and data.get('records'):
+                records = data['records']
+                df = pd.DataFrame(records)
+                df['datetime'] = pd.to_datetime(df['datetime'])
+                df.set_index('datetime', inplace=True)
+                return df
+        
         return pd.DataFrame()
+        
     except Exception as e:
-        st.warning(f"Error processing hourly data: {str(e)}")
+        print(f"Could not fetch historical hourly data: {e}")
         return pd.DataFrame()
+
 
 # Fetch data from API
 weather_df, api_response = fetch_weather_data_from_api()
 
-# Try to load hourly data from CSV with multiple paths
-hourly_df = pd.DataFrame()
-hourly_csv_paths = [
-    r"C:\Users\PHUC\Downloads\DSEB_NEU\HK5\Machine Learning 1\Project ML\machine_learning_lab\dataset\hn_hourly.csv",
-    "dataset/hn_hourly.csv",
-    "../dataset/hn_hourly.csv",
-    "../../dataset/hn_hourly.csv"
-]
+# Fetch hourly forecast (next 24 hours)
+hourly_forecast = fetch_hourly_data_from_api(reference_datetime=None)
 
-for hourly_path in hourly_csv_paths:
-    try:
-        hourly_df = pd.read_csv(hourly_path, parse_dates=["datetime"])
-        hourly_df['datetime'] = pd.to_datetime(hourly_df['datetime'])
-        hourly_df = hourly_df.set_index('datetime')
-        print(f"✅ Loaded hourly data from: {hourly_path}")
-        break
-    except (FileNotFoundError, Exception):
-        continue
+# Fetch last historical hour
+last_historical_hour = fetch_historical_hourly_data()
 
-if hourly_df.empty:
-    print("⚠️ Could not load hourly data from CSV")
-    # Try to fetch from API as fallback
-    hourly_df = fetch_hourly_data_from_api()
+# Combine last historical hour with forecast (full 24-hour predictions)
+if not last_historical_hour.empty and not hourly_forecast.empty:
+    # Add is_forecast flag
+    last_historical_hour['is_forecast'] = False
+    hourly_forecast['is_forecast'] = True
+    
+    # Combine them: 1 historical + 24 forecast = 25 hours total (hour t to hour t next day)
+    hourly_df = pd.concat([last_historical_hour, hourly_forecast])
+    hourly_df = hourly_df.sort_index()
+    print(f"✅ Combined hourly data: 1 historical + 24 forecast = {len(hourly_df)} total (hour t to hour t+24)")
+elif not hourly_forecast.empty:
+    # If no historical data, just show 24 hours of forecast
+    hourly_df = hourly_forecast.head(24)
+    hourly_df['is_forecast'] = True
+else:
+    hourly_df = pd.DataFrame()
 
 # CONFIGURATION
 # ========================================
@@ -292,6 +252,51 @@ def get_weather_icon_and_text(icon, conditions):
         return ('⛈️', 'Thunderstorm')
     else:
         return ('🌤️', 'Fair Weather')
+
+def get_weather_background(icon, conditions):
+    """Get background gradient and overlay based on weather condition"""
+    icon_str = str(icon).lower()
+    conditions_str = str(conditions).lower() if conditions else ''
+    
+    # Rain backgrounds
+    if 'rain' in icon_str or 'rain' in conditions_str:
+        return 'linear-gradient(180deg, rgba(74,95,122,0.95) 0%, rgba(45,62,80,0.95) 50%, rgba(26,35,50,0.95) 100%)'
+    
+    # Thunderstorm backgrounds
+    elif 'thunder' in icon_str or 'thunder' in conditions_str:
+        return 'linear-gradient(180deg, rgba(44,26,77,0.95) 0%, rgba(26,16,53,0.95) 50%, rgba(10,5,18,0.95) 100%)'
+    
+    # Clear day backgrounds
+    elif 'clear-day' in icon_str or 'clear' in icon_str:
+        return 'linear-gradient(180deg, rgba(86,204,242,0.95) 0%, rgba(47,128,237,0.95) 50%, rgba(30,91,168,0.95) 100%)'
+    
+    # Clear night backgrounds
+    elif 'clear-night' in icon_str or 'night' in conditions_str:
+        return 'linear-gradient(180deg, rgba(26,31,58,0.95) 0%, rgba(15,20,25,0.95) 50%, rgba(0,0,0,0.95) 100%)'
+    
+    # Cloudy backgrounds
+    elif 'cloudy' in icon_str or 'overcast' in conditions_str:
+        return 'linear-gradient(180deg, rgba(95,109,126,0.95) 0%, rgba(61,74,92,0.95) 50%, rgba(42,52,66,0.95) 100%)'
+    
+    # Partly cloudy backgrounds
+    elif 'partly-cloudy' in icon_str:
+        return 'linear-gradient(180deg, rgba(111,163,216,0.95) 0%, rgba(61,125,181,0.95) 50%, rgba(46,92,138,0.95) 100%)'
+    
+    # Fog backgrounds
+    elif 'fog' in icon_str or 'fog' in conditions_str:
+        return 'linear-gradient(180deg, rgba(138,154,168,0.95) 0%, rgba(95,111,126,0.95) 50%, rgba(61,74,92,0.95) 100%)'
+    
+    # Snow backgrounds
+    elif 'snow' in icon_str or 'snow' in conditions_str:
+        return 'linear-gradient(180deg, rgba(224,242,247,0.95) 0%, rgba(179,217,230,0.95) 50%, rgba(127,184,212,0.95) 100%)'
+    
+    # Wind backgrounds
+    elif 'wind' in icon_str or 'wind' in conditions_str:
+        return 'linear-gradient(180deg, rgba(123,168,196,0.95) 0%, rgba(74,117,145,0.95) 50%, rgba(46,92,138,0.95) 100%)'
+    
+    # Default background
+    else:
+        return 'linear-gradient(180deg, rgba(46,92,138,0.95) 0%, rgba(30,58,95,0.95) 100%)'
 
 def get_moon_phase_emoji(moonphase):
     """Convert moon phase value to emoji"""
@@ -353,141 +358,18 @@ def get_severe_risk_level(risk):
         return "High Risk", "#F44336"
 
 # ========================================
-# STYLING - NAVY BLUE THEME
+# STYLING - LOAD CUSTOM CSS
 # ========================================
-st.markdown("""
-    <style>
-        /* Import Google Fonts */
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-        
-        /* Nền trang - Navy Blue */
-        .main {
-            background: linear-gradient(180deg, #1a2332 0%, #0f1419 100%);
-            font-family: 'Inter', sans-serif;
-        }
-        
-        .block-container {
-            padding-top: 2rem;
-            max-width: 1400px;
-        }
-        
-        /* Card chính - Blue Gradient */
-        .main-card {
-            background: linear-gradient(135deg, #2e5c8a 0%, #1e3a5f 100%);
-            color: white;
-            border-radius: 24px;
-            padding: 35px;
-            margin-bottom: 25px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-        }
-        
-        /* Forecast card */
-        .forecast-card {
-            background: linear-gradient(135deg, #2a3f5f 0%, #1a2838 100%);
-            border-radius: 16px;
-            padding: 18px;
-            margin: 10px 0;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        
-        .forecast-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
-        }
-        
-        .temp-large {
-            font-size: 72px;
-            font-weight: 700;
-            margin: 0;
-            color: #ffffff;
-            text-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-        }
-        
-        /* Detail box */
-        .detail-box {
-            background: linear-gradient(135deg, #2a3f5f 0%, #1a2838 100%);
-            border-radius: 16px;
-            padding: 18px;
-            margin: 10px 0;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            transition: transform 0.2s;
-        }
-        
-        .detail-box:hover {
-            transform: translateY(-2px);
-        }
-        
-        /* Sidebar */
-        section[data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #1e2d3d 0%, #0f1419 100%);
-        }
-        
-        section[data-testid="stSidebar"] .element-container {
-            color: #e0e7ff;
-        }
-        
-        /* Headers */
-        h1, h2, h3 {
-            color: #ffffff !important;
-            font-family: 'Inter', sans-serif;
-        }
-        
-        /* Metrics */
-        [data-testid="stMetricValue"] {
-            color: #ffffff;
-            font-size: 24px;
-            font-weight: 600;
-        }
-        
-        [data-testid="stMetricDelta"] {
-            color: #94a3b8;
-        }
-        
-        /* Info boxes */
-        .stAlert {
-            background: linear-gradient(135deg, #2a3f5f 0%, #1a2838 100%);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            color: #e0e7ff;
-        }
-        
-        /* Subheader styling */
-        .css-10trblm {
-            color: #e0e7ff;
-        }
-        
-        /* Caption text */
-        .css-1629p8f, .st-emotion-cache-1629p8f {
-            color: #94a3b8 !important;
-        }
-    </style>
-""", unsafe_allow_html=True)
+def load_css():
+    """Load custom CSS from external file"""
+    css_file = os.path.join(os.path.dirname(__file__), 'style.css')
+    if os.path.exists(css_file):
+        with open(css_file) as f:
+            st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+    else:
+        st.warning("⚠️ style.css not found")
 
-# ========================================
-# SIDEBAR
-# ========================================
-st.sidebar.title("⚙️ Settings")
-
-
-# 🗓 Date Picker (Simplified)
-if weather_df is not None and len(weather_df) > 0:
-    min_date = weather_df.index.min().date()
-    max_date = weather_df.index.max().date()
-    selected_date = st.sidebar.date_input(
-        "📅 Select Date",
-        value = max_date,
-        min_value=min_date,
-        max_value=max_date
-    )
-else:
-    selected_date = datetime.now().date()
-
-st.sidebar.markdown("---")
-
+load_css()
 
 # ========================================
 # CHECK DATA
@@ -505,6 +387,40 @@ if weather_df is None or len(weather_df) == 0:
 # Sort data
 weather_df = weather_df.sort_index()
 
+# Auto-select the last historical date (not forecast date)
+if weather_df is not None and len(weather_df) > 0:
+    # Filter for historical data only (where is_forecast is False)
+    historical_data = weather_df[weather_df['is_forecast'] == False]
+    if not historical_data.empty:
+        selected_date = historical_data.index.max().date()
+    else:
+        # Fallback to latest date if no historical data
+        selected_date = weather_df.index.max().date()
+else:
+    selected_date = datetime.now().date()
+
+# Get current data for background
+selected_ts = pd.to_datetime(selected_date)
+if selected_ts in weather_df.index:
+    current_for_bg = weather_df.loc[selected_ts]
+else:
+    current_for_bg = weather_df.loc[weather_df.index.date == selected_ts.date()].iloc[-1]
+
+# Get weather background for entire page
+page_bg = get_weather_background(current_for_bg.get('icon', ''), current_for_bg['conditions'])
+
+# Apply dynamic background to entire page
+st.markdown(f"""
+    <style>
+        .main {{
+            background: {page_bg} !important;
+        }}
+        .stApp {{
+            background: {page_bg} !important;
+        }}
+    </style>
+""", unsafe_allow_html=True)
+
 # ========================================
 # HEADER
 # ========================================
@@ -516,10 +432,6 @@ model_version = api_response.get('model_version', 'N/A') if api_response else 'N
 
 st.markdown(f"""
     <div style="margin-bottom: 20px;">
-        <h1 style="font-size: 32px; margin: 0; color: #ffffff;">Have a nice day! 🌤️</h1>
-        <p style="color: #94a3b8; font-size: 16px; margin-top: 5px;">
-            {display_date}
-        </p>
         <p style="color: #60a5fa; font-size: 13px; margin-top: 5px;">
             API Status: {api_status} | Model: {model_version}
         </p>
@@ -530,40 +442,57 @@ st.markdown(f"""
 # ========================================
 # MAIN LAYOUT
 # ========================================
-left_col, right_col = st.columns([2.5, 1])
+
+# Ensure we have a session_state key to track the current view
+if 'view' not in st.session_state:
+    st.session_state['view'] = "Weather Forecast"
+
+# Create tabs for different views
+tab1, tab2, tab3 = st.tabs(["Weather Forecast", "Historical Data Analysis", "Model Performance"])
 
 # ========================================
-# LEFT COLUMN
+# WEATHER FORECAST TAB
 # ========================================
-with left_col:
+with tab1:
+    st.session_state['view'] = "Weather Forecast"
+
+    # Get current data for the selected date
     selected_ts = pd.to_datetime(selected_date)
-    # Trường hợp index có time, nên select ngày gần nhất
     if selected_ts in weather_df.index:
         current = weather_df.loc[selected_ts]
     else:
         current = weather_df.loc[weather_df.index.date == selected_ts.date()].iloc[-1]
 
-    icon = get_weather_icon(current['conditions'])
-
+    # Weather Overview
     st.markdown(f"""
-        <div class="main-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h2 style="margin:0; font-size:24px;">Weather Overview</h2>
-                <div style="background: rgba(255,255,255,0.1); padding: 8px 16px; border-radius: 20px; font-size: 14px;">
-                    Forecast Summary
-                </div>
+    <div style="
+        text-align: center; 
+        max-width: 600px; 
+        margin: 0 auto 25px auto; 
+        padding: 35px;
+        position: relative;
+        overflow: hidden;
+        font-family: 'Inter', sans-serif;
+        font-weight: 300;
+        line-height: 1.35;
+    ">
+        <div style="font-size:20px; color:#ffffff; margin-bottom: 15px; text-shadow: 1px 1px 3px rgba(0,0,0,0.5); font-weight: 600; letter-spacing: 0.6px; line-height:1.4;">Hanoi, {display_date}</div>
+        <div style="font-size:72px; font-weight:700; margin-bottom: 10px; text-shadow: 2px 2px 8px rgba(0,0,0,0.5); letter-spacing: 0.8px; line-height:1.05;">{round(current['temp'])}°</div>
+        <div style="font-size:24px; color:#ffffff; margin-bottom: 20px; text-shadow: 1px 1px 4px rgba(0,0,0,0.5); font-weight:500; letter-spacing:0.4px; line-height:1.4;">{current['conditions']}</div>
+        <div style="display: flex; justify-content: center; gap: 40px; margin-top: 20px;">
+            <div style="text-align: center;">
+                <div style="color:#ffffff; font-size:14px; text-shadow: 1px 1px 2px rgba(0,0,0,0.5); font-weight:400; line-height:1.3;">High</div>
+                <div style="color:#ffffff; font-size:20px; font-weight:500; text-shadow: 1px 1px 4px rgba(0,0,0,0.5); line-height:1.2;">{current['tempmax']:.0f}°</div>
             </div>
-            <div style="font-size:70px;">{icon}</div> 
-            <div style="font-size:36px; font-weight:700;">{current['temp']:.1f}°C</div>
-            <div style="font-size:18px; color:#e0e7ff;">{current['conditions']}</div>
+            <div style="text-align: center;">
+                <div style="color:#ffffff; font-size:14px; text-shadow: 1px 1px 2px rgba(0,0,0,0.5); font-weight:400; line-height:1.3;">Low</div>
+                <div style="color:#ffffff; font-size:20px; font-weight:500; text-shadow: 1px 1px 4px rgba(0,0,0,0.5); line-height:1.2;">{current['tempmin']:.0f}°</div>
+            </div>
         </div>
-    """, unsafe_allow_html=True)
+    </div>
+""", unsafe_allow_html=True)
 
-
-    #======================
-    # HOURLY TEMP
-    hourly_today = hourly_df[hourly_df.index.date == selected_date]
-
+    # Hourly Forecast
     # Icon map
     icon_map = {
         'clear-day': '☀️',
@@ -578,312 +507,579 @@ with left_col:
     def icon_from_code(code):
         return icon_map.get(str(code), "❓")
 
-    # --- Build scroll ngang ---
+    # Build unified glass morphism container with horizontal scroll
     html = '''
     <div style="
-        display:flex; 
-        overflow-x:auto; 
-        overflow-y:hidden;
-        gap:10px; 
-        padding:10px; 
-        white-space:nowrap;
-        height:120px;">
+        background: rgba(255, 255, 255, 0.12);
+        border-radius: 20px;
+        padding: 20px;
+        margin-bottom: 25px;
+        margin-right: 0px; /* Adjust this value to modify the right margin */
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+        backdrop-filter: blur(10px) saturate(140%);
+        -webkit-backdrop-filter: blur(10px) saturate(140%);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        overflow: hidden;
+    ">
+        <p style="
+            color: #ffffff; 
+            font-size: 15px; 
+            margin: 0 20px 0 0; 
+            font-weight: 600;
+            font-family: 'Inter', sans-serif;
+            text-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+            letter-spacing: -0.02em;
+        ">24-Hour Forecast</p>
+        <div style="
+            display: flex; 
+            overflow-x: auto; 
+            overflow-y: hidden;
+            gap: 0;
+            padding: 5px 0;
+            white-space: nowrap;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255, 255, 255, 0.3) rgba(255, 255, 255, 0.1);
+        ">
     '''
 
-    current_hour = pd.Timestamp.now().hour
-    temp_fallback = hourly_today['temp'].mean() if not hourly_today.empty else 20
-
-    for hour in range(24):
-        row = hourly_today[hourly_today.index.hour == hour] if not hourly_today.empty else None
-        if row is not None and not row.empty:
-            temp = f"{row.iloc[0]['temp']:.0f}°"
-            icon = icon_from_code(row.iloc[0]['icon'])
-        else:
-            temp = f"{temp_fallback:.0f}°"
-            icon = "❓"
-        
-        label = "Now" if hour == current_hour else f"{hour}:00"
-        border = "2px solid #3b82f6" if hour == current_hour else "none"
-        
-        html += f"""
-        <div style="
-            flex:0 0 auto;
-            width:70px; 
-            background:#1e293b; 
-            color:#e2e8f0; 
-            border-radius:12px; 
-            padding:10px; 
-            text-align:center; 
-            border:{border};
-            height:100px;">
-            <div style="font-size:18px; font-weight:bold; color:#3b82f6;">{temp}</div>
-            <div style="font-size:26px; margin:4px 0;">{icon}</div>
-            <div style="font-size:12px; color:#cbd5e1;">{label}</div>
-        </div>
-        """
-
-    html += "</div>"
-
-    st.components.v1.html(html, height=140, scrolling=False)
-
-
-
-    #======================
-    # HOURLY TEMP
-    if not hourly_df.empty and hasattr(hourly_df.index, 'date'):
-        hourly_today = hourly_df[hourly_df.index.date == selected_date]
+    # Display all hourly data (1 historical + 24 forecast = 25 hours)
+    if not hourly_df.empty:
+        for i, (idx, row) in enumerate(hourly_df.iterrows()):
+            if i >= 25:  # Allow 25 hours to show hour t to hour t next day
+                break
+            
+            temp = f"{row['temp']:.0f}°"
+            icon = icon_from_code(row.get('icon', ''))
+            hour_label = idx.strftime('%H:%M')
+            
+            # Add separator between hours except for the first one
+            border_left = "1px solid rgba(255, 255, 255, 0.1)" if i > 0 else "none"
+            
+            html += f"""
+            <div style="
+                flex: 1 1 auto;
+                min-width: 70px;
+                max-width: 120px;
+                padding: 15px 10px;
+                text-align: center;
+                border-left: {border_left};
+                transition: all 0.3s ease;
+                font-family: 'Inter', sans-serif;
+            ">
+                <div style="
+                    font-size: 12px; 
+                    color: rgba(255, 255, 255, 0.7);
+                    margin-bottom: 8px;
+                    font-weight: 500;
+                    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+                ">{hour_label}</div>
+                <div style="
+                    font-size: 32px; 
+                    margin: 8px 0;
+                    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+                ">{icon}</div>
+                <div style="
+                    font-size: 18px; 
+                    font-weight: 600; 
+                    color: #ffffff;
+                    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+                ">{temp}</div>
+            </div>
+            """
     else:
-        hourly_today = pd.DataFrame()
+        # Show placeholder if no hourly data
+        for hour in range(24):
+            border_left = "1px solid rgba(255, 255, 255, 0.1)" if hour > 0 else "none"
+            html += f"""
+            <div style="
+                flex: 1 1 auto;
+                min-width: 70px;
+                max-width: 120px;
+                padding: 15px 10px;
+                text-align: center;
+                border-left: {border_left};
+                font-family: 'Inter', sans-serif;
+            ">
+                <div style="font-size: 12px; color: rgba(255, 255, 255, 0.5); margin-bottom: 8px;">{hour:02d}:00</div>
+                <div style="font-size: 32px; margin: 8px 0; opacity: 0.3;">❓</div>
+                <div style="font-size: 18px; font-weight: 600; color: rgba(255, 255, 255, 0.5);">--°</div>
+            </div>
+            """
 
-    # Icon map
-    icon_map = {
-        'clear-day': '☀️',
-        'clear-night': '🌙',
-        'partly-cloudy-day': '🌤️',
-        'partly-cloudy-night': '⛅',
-        'cloudy': '☁️',
-        'rain': '🌧️',
-        'fog': '🌫️',
-        'wind': '💨'
-    }
-    def icon_from_code(code):
-        return icon_map.get(str(code), "❓")
+    html += """
+        </div>
+    </div>
+    <style>
+        /* Custom scrollbar for webkit browsers */
+        div::-webkit-scrollbar {
+            height: 8px;
+        }
+        div::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            margin: 0 10px;
+        }
+        div::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 10px;
+        }
+        div::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.4);
+        }
+    </style>
+    """
+    st.components.v1.html(html, height=200, scrolling=False)
 
-    # --- Build scroll ngang ---
-    html = '''
-    <div style="
-        display:flex; 
-        overflow-x:auto; 
-        overflow-y:hidden;
-        gap:10px; 
-        padding:10px; 
-        white-space:nowrap;
-        height:120px;">
-    '''
+    # TWO-COLUMN LAYOUT
+    left_col, right_col = st.columns([1, 1.5])
 
-    current_hour = pd.Timestamp.now().hour
-    temp_fallback = hourly_today['temp'].mean() if not hourly_today.empty else 20
-
-    for hour in range(24):
-        row = hourly_today[hourly_today.index.hour == hour] if not hourly_today.empty else None
-        if row is not None and not row.empty:
-            temp = f"{row.iloc[0]['temp']:.0f}°"
-            icon = icon_from_code(row.iloc[0]['icon'])
-        else:
-            temp = f"{temp_fallback:.0f}°"
-            icon = "❓"
+    # LEFT COLUMN - 5-Day Forecast
+    with left_col:
+        forecast_days = weather_df.loc[weather_df.index >= selected_ts].head(5)
         
-        label = "Now" if hour == current_hour else f"{hour}:00"
-        border = "2px solid #3b82f6" if hour == current_hour else "none"
-        
-        html += f"""
+        # Build unified container for 5-day forecast
+        forecast_html = '''
         <div style="
-            flex:0 0 auto;
-            width:70px; 
-            background:#1e293b; 
-            color:#e2e8f0; 
-            border-radius:12px; 
-            padding:10px; 
-            text-align:center; 
-            border:{border};
-            height:100px;">
-            <div style="font-size:18px; font-weight:bold; color:#3b82f6;">{temp}</div>
-            <div style="font-size:26px; margin:4px 0;">{icon}</div>
-            <div style="font-size:12px; color:#cbd5e1;">{label}</div>
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 20px;
+            padding: 20px;
+            margin-bottom: 0; /* Adjusted bottom margin to align with Weather Details */
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+            backdrop-filter: blur(10px) saturate(140%);
+            -webkit-backdrop-filter: blur(10px) saturate(140%);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        ">
+            <p style="
+                color: #ffffff; 
+                font-size: 15px; 
+                margin: 0 20px 0 0; 
+                font-weight: 600;
+                font-family: 'Inter', sans-serif;
+                text-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+                letter-spacing: -0.02em;
+            ">5-Day Forecast</p>
+        '''
+        
+        for i, (idx, row) in enumerate(forecast_days.iterrows()):
+            icon_emoji, _ = get_weather_icon_and_text(row.get('icon', ''), row.get('conditions', ''))
+            precip_prob = row.get('precipprob', 0)
+            
+            border_top = "1px solid rgba(255, 255, 255, 0.1)" if i > 0 else "none"
+            
+            forecast_html += f"""
+            <div style="
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 15px 0;
+                border-top: {border_top};
+                font-family: 'Inter', sans-serif;
+            ">
+                <div style="flex: 1; min-width: 80px;">
+                    <div style="
+                        font-weight: 600; 
+                        color: #ffffff; 
+                        font-size: 14px; 
+                        margin-bottom: 4px;
+                        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+                    ">{idx.strftime('%a, %b %d')}</div>
+                    <div style="
+                        color: rgba(255, 255, 255, 0.7); 
+                        font-size: 12px;
+                    ">💧 {precip_prob:.0f}%</div>
+                </div>
+                <div style="
+                    font-size: 42px; 
+                    margin: 0 15px;
+                    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+                ">{icon_emoji}</div>
+                <div style="text-align: right; flex: 1; min-width: 80px;">
+                    <div style="
+                        color: #ffffff; 
+                        font-size: 24px; 
+                        font-weight: 700;
+                        text-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+                    ">{row['temp']:.0f}°C</div>
+                    <div style="
+                        color: rgba(255, 255, 255, 0.7); 
+                        font-size: 13px;
+                    ">{row['tempmin']:.0f}° / {row['tempmax']:.0f}°</div>
+                </div>
+            </div>
+            """
+        
+        forecast_html += "</div>"
+        st.components.v1.html(forecast_html, height=600, scrolling=False)
+
+    # RIGHT COLUMN - Temperature Chart & Details
+    with right_col:
+        # Temperature Trend Chart
+        selected_ts = pd.to_datetime(selected_date)
+        weekly_df = weather_df.loc[weather_df.index >= selected_ts].head(7)
+        
+        # Create the plot
+        fig, ax = plt.subplots(figsize=(10, 4))
+        fig.patch.set_facecolor('none')
+        ax.set_facecolor('none')
+        
+        ax.plot(weekly_df.index, weekly_df['tempmax'], label="Max Temp", linewidth=3, marker='o', color='#ff6b6b')
+        ax.plot(weekly_df.index, weekly_df['tempmin'], label="Min Temp", linewidth=3, marker='o', linestyle="--", color='#4ecdc4')
+        
+        # Add predicted temperature line if available
+        if 'temp' in weekly_df.columns:
+            ax.plot(weekly_df.index, weekly_df['temp'], label="Predicted Temp", linewidth=3, marker='s', linestyle=':', color='#ffd93d')
+        
+        ax.fill_between(weekly_df.index, weekly_df['tempmin'], weekly_df['tempmax'], alpha=0.2, color='#ffffff')
+        
+        ax.set_title("", color="#ffffff")
+        ax.set_ylabel("Temperature (°C)", color="#ffffff", fontsize=10)
+        ax.tick_params(axis='x', colors='#ffffff', rotation=15, labelsize=9)
+        ax.tick_params(axis='y', colors='#ffffff', labelsize=9)
+        ax.legend(facecolor='none', labelcolor="#ffffff", frameon=False, fontsize=9)
+        ax.grid(True, alpha=0.2, color='#ffffff', linestyle='--', linewidth=0.5)
+        for spine in ax.spines.values():
+            spine.set_color('#ffffff')
+            spine.set_alpha(0.2)
+        
+        # Convert plot to base64 image
+        import io
+        import base64
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format='png', bbox_inches='tight', transparent=True, dpi=100)
+        buffer.seek(0)
+        img_base64 = base64.b64encode(buffer.read()).decode()
+        plt.close(fig)
+        
+        # Render container with embedded image
+        st.markdown(f'''
+        <div style="
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 20px;
+            padding: 20px;
+            margin: 7px 10px 20px 0;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+            backdrop-filter: blur(10px) saturate(140%);
+            -webkit-backdrop-filter: blur(10px) saturate(140%);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        ">
+            <p style="
+                color: #ffffff; 
+                font-size: 15px; 
+                margin: 0 0 15px 0; 
+                font-weight: 600;
+                font-family: 'Inter', sans-serif;
+                text-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+                letter-spacing: -0.02em;
+            ">Temperature Trend</p>
+            <img src="data:image/png;base64,{img_base64}" style="width: 100%; height: auto; max-width: 100%;">
         </div>
-        """
+        ''', unsafe_allow_html=True)
+        
+        # Weather Details - compact single-row (4 columns)
+        detail_cols = st.columns(4)
 
-    html += "</div>"
+        # 1) Sun & Moon (combined) - show only sunrise & sunset
+        with detail_cols[0]:
+            sunrise = current.get('sunrise', 'N/A')
+            sunset = current.get('sunset', 'N/A')
+            # Format times to HH:MM if possible
+            try:
+                sunrise_time = pd.to_datetime(sunrise).strftime('%H:%M')
+            except Exception:
+                sunrise_time = str(sunrise)
+            try:
+                sunset_time = pd.to_datetime(sunset).strftime('%H:%M')
+            except Exception:
+                sunset_time = str(sunset)
 
-    st.components.v1.html(html, height=140, scrolling=False)
+            st.markdown(f"""
+                <div class="detail-box" style="padding:10px; min-height:98px; text-align:left;">
+                    <p style="color: #ffffff; font-size:15px; margin:0 0 8px 0; font-weight:600; font-family: 'Inter', sans-serif; text-shadow: 0 2px 6px rgba(0,0,0,0.4);">Sunrise</p>
+                    <div style="font-size:20px; margin-bottom:6px;">🌅</div>
+                    <div style="font-size:18px; font-weight:700; color:#ffffff; margin-bottom:6px;">{sunrise_time}</div>
+                    <div style="font-size:12px; color:rgba(255,255,255,0.6);">Sunset: {sunset_time}</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+        # 2) Humidity & Dew
+        with detail_cols[1]:
+            st.markdown(f"""
+                <div class="detail-box" style="padding:10px; min-height:98px; text-align:left;">
+                    <p style="color: #ffffff; font-size:15px; margin:0 0 8px 0; font-weight:600; font-family: 'Inter', sans-serif; text-shadow: 0 2px 6px rgba(0,0,0,0.4);">Humidity & Dew</p>
+                    <div style="font-size:20px; margin-bottom:6px;">💧</div>
+                    <div style="font-size:20px; font-weight:700; color:#ffffff; margin-bottom:4px;">{current['humidity']:.0f}%</div>
+                    <div style="font-size:12px; color:rgba(255,255,255,0.7);">Dew point: {current.get('dew', 0):.0f}°C</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+        # 3) Wind
+        with detail_cols[2]:
+            windgust = current.get('windgust', current['windspeed'])
+            winddir = current.get('winddir', 0)
+            wind_directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+            wind_dir_text = wind_directions[int((winddir + 22.5) / 45) % 8]
+            st.markdown(f"""
+                <div class="detail-box" style="padding:10px; min-height:98px; text-align:left;">
+                    <p style="color: #ffffff; font-size:15px; margin:0 0 8px 0; font-weight:600; font-family: 'Inter', sans-serif; text-shadow: 0 2px 6px rgba(0,0,0,0.4);">Wind</p>
+                    <div style="font-size:20px; margin-bottom:6px;">💨</div>
+                    <div style="font-size:20px; font-weight:700; color:#ffffff; margin-bottom:4px;">{current['windspeed']:.0f} km/h</div>
+                    <div style="font-size:12px; color:rgba(255,255,255,0.7);">{wind_dir_text} • Gusts: {windgust:.0f} km/h</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+        # 4) UV Index
+        with detail_cols[3]:
+            uv_level = get_uv_level(current.get('uvindex', 0))
+            st.markdown(f"""
+                <div class="detail-box" style="padding:10px; min-height:98px; text-align:left;">
+                    <p style="color: #ffffff; font-size:15px; margin:0 0 8px 0; font-weight:600; font-family: 'Inter', sans-serif; text-shadow: 0 2px 6px rgba(0,0,0,0.4);">UV Index</p>
+                    <div style="font-size:20px; margin-bottom:6px;">☀️</div>
+                    <div style="font-size:20px; font-weight:700; color:#ffffff; margin-bottom:4px;">{current.get('uvindex', 0):.0f}</div>
+                    <div style="font-size:12px; color:rgba(255,255,255,0.7);">{uv_level}</div>
+                </div>
+            """, unsafe_allow_html=True)
 
 
-    # 5-Day Forecast
-    st.markdown('<h3 style="color: #ffffff; font-size: 30px; margin: 30px 0 15px 0;">📅 5-Day Forecast</h3>', unsafe_allow_html=True)
-    forecast_days = weather_df.loc[weather_df.index >= selected_ts].head(5) 
+    # Adjust the top margin of the Weather Details section
+        st.markdown(
+            """
+            <style>
+                .detail-box {
+                    margin-top: 0px; /* Adjust this value to reduce or increase the gap */
+                }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
 
-
-
-    cols = st.columns(min(5, len(forecast_days)))
-    for i, (idx, row) in enumerate(forecast_days.iterrows()):
-        if i < len(cols):
-            with cols[i]:
-                icon_emoji, _ = get_weather_icon_and_text(row.get('icon', ''), row.get('conditions', ''))
-                precip_prob = row.get('precipprob', 0)
-                
-                st.markdown(f"""
-                    <div class="forecast-card">
-                        <div style="font-weight:600; color:#e0e7ff; font-size: 14px; margin-bottom: 10px;">
-                            {idx.strftime('%a, %b %d')}
-                        </div>
-                        <div style="font-size:42px; margin:12px 0; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">
-                            {icon_emoji}
-                        </div>
-                        <div style="color:#ffffff; font-size:22px; font-weight:700; margin: 8px 0;">
-                            {row['temp']:.0f}°C
-                        </div>
-                        <div style="color:#94a3b8; font-size:13px; margin-bottom: 8px;">
-                            {row['tempmin']:.0f}° / {row['tempmax']:.0f}°
-                        </div>
-                        <div style="color:#60a5fa; font-size:12px; background: rgba(96,165,250,0.1); 
-                                    padding: 4px 8px; border-radius: 8px; display: inline-block;">
-                            💧 {precip_prob:.0f}%
-                        </div>
-                    </div>
-                """, unsafe_allow_html=True)
-
-
-    # 🧭 Weekly Forecast Chart
-    st.markdown('<h3 style="color: #ffffff; font-size: 30px; margin: 30px 0 15px 0;">📈 Weekly Temperature Trend</h3>', unsafe_allow_html=True)
-    selected_ts = pd.to_datetime(selected_date)
-    weekly_df = weather_df.loc[weather_df.index >= selected_ts].head(7)
-
-    fig, ax = plt.subplots(figsize=(12, 4))
-    fig.patch.set_facecolor('#1a2332')
-    ax.set_facecolor('#1a2332')
-
-    ax.plot(weekly_df.index, weekly_df['tempmax'], label="Max Temp", linewidth=3, marker='o')
-    ax.plot(weekly_df.index, weekly_df['tempmin'], label="Min Temp", linewidth=3, marker='o', linestyle="--")
-    ax.fill_between(weekly_df.index, weekly_df['tempmin'], weekly_df['tempmax'], alpha=0.2)
-
-    ax.set_title("7-Day Temperature Range", color="#e0e7ff")
-    ax.set_ylabel("Temperature (°C)", color="#94a3b8")
-    ax.tick_params(axis='x', colors='#94a3b8', rotation=15)
-    ax.tick_params(axis='y', colors='#94a3b8')
-    ax.legend(facecolor="#1a2332", labelcolor="#e0e7ff")
-    for spine in ax.spines.values():
-        spine.set_color('#2a3f5f')
-    st.pyplot(fig)
-    plt.close()
-
-    
-    
+        # Adjust the right margin of the Weather Details section
+        st.markdown(
+            """
+            <style>
+                .detail-box {
+                    margin-right: 9px; /* Adjust this value to modify the right margin */
+                }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
 
 # ========================================
-# RIGHT COLUMN
+# HISTORICAL DATA TAB
 # ========================================
-with right_col:
-    # Sun & Moon
-    st.markdown('<h3 style="color: #ffffff; font-size: 18px; margin: 0 0 15px 0;">🌅 Sun & Moon</h3>', unsafe_allow_html=True)
-    sunrise = current.get('sunrise', 'N/A')
-    sunset = current.get('sunset', 'N/A')
-    moon_phase = get_moon_phase_emoji(current.get('moonphase', 0))
-    
-    st.markdown(f"""
-        <div class="detail-box">
-            <div style="display:flex; justify-content:space-between; margin:12px 0; color: #e0e7ff;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <span style="font-size: 20px;">🌅</span>
-                    <span>Sunrise</span>
-                </div>
-                <div style="font-weight:600; color: #ffffff;">{sunrise}</div>
-            </div>
-            <div style="display:flex; justify-content:space-between; margin:12px 0; color: #e0e7ff;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <span style="font-size: 20px;">🌇</span>
-                    <span>Sunset</span>
-                </div>
-                <div style="font-weight:600; color: #ffffff;">{sunset}</div>
-            </div>
-            <div style="display:flex; justify-content:space-between; margin:12px 0; color: #e0e7ff;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <span style="font-size: 20px;">🌙</span>
-                    <span>Moon</span>
-                </div>
-                <div style="font-weight:600; color: #ffffff; font-size: 13px;">{moon_phase}</div>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    # Weather Details
-    st.markdown('<h3 style="color: #ffffff; font-size: 18px; margin: 25px 0 15px 0;">📍 Weather Details</h3>', unsafe_allow_html=True)
-    
-    # Wind
-    windgust = current.get('windgust', current['windspeed'])
-    winddir = current.get('winddir', 0)
-    wind_directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
-    wind_dir_text = wind_directions[int((winddir + 22.5) / 45) % 8]
-    
-    st.markdown(f"""
-        <div class="detail-box">
-            <div style="font-size:28px; margin-bottom: 8px;">💨</div>
-            <div style="color:#94a3b8; font-size:13px; margin-bottom:8px;">Wind</div>
-            <div style="font-size:24px; font-weight:700; color:#ffffff; margin-bottom:5px;">
-                {current['windspeed']:.0f} km/h
-            </div>
-            <div style="font-size:13px; color:#94a3b8;">
-                Direction: {wind_dir_text} • Gusts: {windgust:.0f} km/h
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    # Humidity & Dew Point
-    st.markdown(f"""
-        <div class="detail-box">
-            <div style="font-size:28px; margin-bottom: 8px;">💧</div>
-            <div style="color:#94a3b8; font-size:13px; margin-bottom:8px;">Humidity & Dew</div>
-            <div style="font-size:24px; font-weight:700; color:#ffffff; margin-bottom:5px;">
-                {current['humidity']:.0f}%
-            </div>
-            <div style="font-size:13px; color:#94a3b8;">Dew point: {current['dew']:.0f}°C</div>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    # Precipitation
-    precip_cover = current.get('precipcover', 0)
-    precip_type = current.get('preciptype', 'None')
-    st.markdown(f"""
-        <div class="detail-box">
-            <div style="font-size:28px; margin-bottom: 8px;">🌧️</div>
-            <div style="color:#94a3b8; font-size:13px; margin-bottom:8px;">Precipitation</div>
-            <div style="font-size:24px; font-weight:700; color:#ffffff; margin-bottom:5px;">
-                {current['precip']:.1f} mm
-            </div>
-            <div style="font-size:13px; color:#94a3b8;">
-                Type: {precip_type if pd.notna(precip_type) else 'None'} • Coverage: {precip_cover:.0f}%
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    # UV Index
-    uv_level = get_uv_level(current.get('uvindex', 0))
-    st.markdown(f"""
-        <div class="detail-box">
-            <div style="font-size:28px; margin-bottom: 8px;">☀️</div>
-            <div style="color:#94a3b8; font-size:13px; margin-bottom:8px;">UV Index</div>
-            <div style="font-size:24px; font-weight:700; color:#ffffff;">
-                {current.get('uvindex', 0):.0f}
-            </div>
-            <div style="font-size:13px; color:#94a3b8;">{uv_level}</div>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    # Visibility
-    st.markdown(f"""
-        <div class="detail-box">
-            <div style="font-size:28px; margin-bottom: 8px;">👁️</div>
-            <div style="color:#94a3b8; font-size:13px; margin-bottom:8px;">Visibility</div>
-            <div style="font-size:24px; font-weight:700; color:#ffffff; margin-bottom:5px;">
-                {current.get('visibility', 0):.1f} km
-            </div>
-            <div style="font-size:13px; color:#94a3b8;">Cloud cover: {current.get('cloudcover', 0):.0f}%</div>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    # Pressure
-    st.markdown(f"""
-        <div class="detail-box">
-            <div style="font-size:28px; margin-bottom: 8px;">🌡️</div>
-            <div style="color:#94a3b8; font-size:13px; margin-bottom:8px;">Pressure</div>
-            <div style="font-size:24px; font-weight:700; color:#ffffff;">
-                {current.get('sealevelpressure', 0):.0f} mb
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
+with tab2:
+    st.session_state['view'] = "Historical Data Analysis"
+    st.title("Historical Data Analysis")
+    st.markdown("This page shows historical temperature series fetched directly from the API (no file reads).")
 
+    # Fetch combined data from API (cached) and use only historical rows
+    with st.spinner("Loading historical data from API..."):
+        df_api, api_info = fetch_weather_data_from_api()
 
+    if df_api is None or df_api.empty:
+        st.warning("No data returned from API.")
+    else:
+        # Select historical rows only (where available)
+        if 'is_forecast' in df_api.columns:
+            hist = df_api[df_api['is_forecast'] == False]
+        else:
+            # If API didn't tag forecasts, assume all rows before the first forecast date are historical
+            hist = df_api.copy()
 
-# SETUP BACKGROUND WEB
+        if hist.empty:
+            st.info("No historical records available from the API.")
+        else:
+            # Ensure datetime index
+            if not isinstance(hist.index, pd.DatetimeIndex):
+                try:
+                    hist.index = pd.to_datetime(hist.index)
+                except Exception:
+                    pass
+
+            # Add filtering options inside an expander (widgets only).
+            # Use explicit session_state keys so changes reliably trigger reruns.
+            month_options = ["All"] + list(hist.index.month_name().unique())
+            year_options = ["All"] + list(hist.index.year.unique())
+
+            # Read widget values from session_state and apply filters (outside the expander)
+            start_date = st.session_state.get('hist_start_date', hist.index.min().date())
+            end_date = st.session_state.get('hist_end_date', hist.index.max().date())
+            month = st.session_state.get('hist_month', 'All')
+            year = st.session_state.get('hist_year', 'All')
+
+            # Validate start_date and end_date
+            if start_date > end_date:
+                st.error("Start Date must be less than or equal to End Date.")
+            else:
+                # Apply filters
+                filtered_hist = hist.copy()
+                if start_date:
+                    filtered_hist = filtered_hist[filtered_hist.index.date >= start_date]
+                if end_date:
+                    filtered_hist = filtered_hist[filtered_hist.index.date <= end_date]
+                if month != "All":
+                    filtered_hist = filtered_hist[filtered_hist.index.month_name() == month]
+                if year != "All":
+                    filtered_hist = filtered_hist[filtered_hist.index.year == year]
+
+                # Plot historical `temp` series without zoom or table (rendered outside the expander)
+                if 'temp' in filtered_hist.columns and not filtered_hist['temp'].dropna().empty:
+                    # Time Series Decomposition
+                    temp_series = filtered_hist['temp'].dropna()
+                    
+                    # Decomposition requires at least 2 full periods of data
+                    period = 7 # Weekly seasonality
+                    if len(temp_series) >= 2 * period:
+                        from statsmodels.tsa.seasonal import seasonal_decompose
+                        from plotly.subplots import make_subplots
+                        import plotly.graph_objects as go
+                        
+                        decomposition = seasonal_decompose(temp_series, model='additive', period=period)
+                        
+                        # Create subplot figure
+                        fig_decomp = make_subplots(rows=4, cols=1, 
+                                                   subplot_titles=("Observed", "Trend", "Seasonality", "Residuals"),
+                                                   vertical_spacing=0.08,
+                                                   shared_xaxes=True)
+
+                        # Add Observed
+                        fig_decomp.add_trace(go.Scatter(x=temp_series.index, y=temp_series, 
+                                                        mode='lines', name='Observed', line=dict(color='#636EFA')), 
+                                             row=1, col=1)
+                        fig_decomp.update_yaxes(title_text="Observed", row=1, col=1)
+
+                        # Add Trend
+                        fig_decomp.add_trace(go.Scatter(x=decomposition.trend.index, y=decomposition.trend, 
+                                                        mode='lines', name='Trend', line=dict(color='#FF7F50')), 
+                                             row=2, col=1)
+                        fig_decomp.update_yaxes(title_text="Trend", row=2, col=1)
+
+                        # Add Seasonality
+                        fig_decomp.add_trace(go.Scatter(x=decomposition.seasonal.index, y=decomposition.seasonal, 
+                                                        mode='lines', name='Seasonality', line=dict(color='#00CC96')), 
+                                             row=3, col=1)
+                        fig_decomp.update_yaxes(title_text="Seasonality", row=3, col=1)
+
+                        # Add Residuals
+                        fig_decomp.add_trace(go.Scatter(x=decomposition.resid.index, y=decomposition.resid, 
+                                                        mode='markers', name='Residuals', marker=dict(color='#EF553B', size=3)), 
+                                             row=4, col=1)
+                        fig_decomp.update_yaxes(title_text="Residuals", row=4, col=1)
+
+                        # Update layout for the combined figure
+                        fig_decomp.update_layout(
+                            showlegend=False,
+                            margin=dict(l=20, r=20, t=30, b=20),
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            height=800 # Adjust height as needed
+                        )
+                        
+                        st.plotly_chart(fig_decomp, use_container_width=True)
+                    else:
+                        st.info(f"Not enough data to perform time series decomposition. At least {2*period} data points are required.")
+
+                else:
+                    st.info("Filtered data does not contain a 'temp' column or contains no values.")
+
+# ========================================
+# MODEL PERFORMANCE TAB
+# ========================================
+with tab3:
+    st.session_state['view'] = "Model Performance"
+    st.title("Model Performance")
+
+    api_base_url = API_URL.rstrip('/')
+    daily_perf_url = f"{api_base_url}/api/v1/performance/daily"
+    hourly_perf_url = f"{api_base_url}/api/v1/performance/hourly"
+    daily_plots_url = f"{api_base_url}/api/v1/performance/daily/plots"
+    hourly_plots_url = f"{api_base_url}/api/v1/performance/hourly/plots"
+
+    # Create sub-tabs for daily and hourly models
+    daily_tab, hourly_tab = st.tabs(["Daily Forecast Model", "Hourly Forecast Model"])
+
+    # -------------------------
+    # DAILY FORECAST MODEL TAB
+    # -------------------------
+    with daily_tab:
+        st.header("Daily Forecast Model Evaluation")
+        try:
+            # --- Display Metrics ---
+            st.subheader("Evaluation Metrics")
+            response = requests.get(daily_perf_url, timeout=10)
+            response.raise_for_status()
+            daily_metrics_data = response.json()
+            daily_metrics_df = pd.DataFrame(daily_metrics_data)
+            st.table(daily_metrics_df.set_index('target'))
+
+            # --- Display Plots ---
+            st.subheader("Evaluation Plots")
+            st.image(f"{daily_plots_url}/scatter_all_targets.png", caption="Scatter Plot for All Targets")
+            st.image(f"{daily_plots_url}/timeseries_all_targets.png", caption="Time Series for All Targets")
+
+            # Per-target plots
+            target_options = [f"t+{i}" for i in range(1, 6)]
+            selected_target = st.selectbox("Select a target to view detailed plots:", options=target_options, key="daily_target_select")
+
+            if selected_target:
+                st.image(f"{daily_plots_url}/scatter_{selected_target}.png", caption=f"Scatter Plot for {selected_target}")
+                st.image(f"{daily_plots_url}/timeseries_{selected_target}.png", caption=f"Time Series for {selected_target}")
+                st.image(f"{daily_plots_url}/timeseries_{selected_target}_zoom.png", caption=f"Zoomed Time Series for {selected_target}")
+
+        except requests.exceptions.RequestException as e:
+            st.error(f"Could not fetch daily performance data from API: {e}")
+        except Exception as e:
+            st.error(f"An error occurred while displaying daily performance data: {e}")
+
+    # -------------------------
+    # HOURLY FORECAST MODEL TAB
+    # -------------------------
+    with hourly_tab:
+        st.header("Hourly Forecast Model Evaluation")
+        try:
+            response = requests.get(hourly_perf_url, timeout=10)
+            response.raise_for_status()
+            hourly_results = response.json()
+
+            # --- Display Average Metrics ---
+            st.subheader("Average Metrics (across all hours)")
+            avg_metrics = hourly_results.get("average_metrics", {})
+            if avg_metrics:
+                cols = st.columns(4)
+                cols[0].metric("MAE", f"{avg_metrics.get('MAE', 0):.3f}")
+                cols[1].metric("RMSE", f"{avg_metrics.get('RMSE', 0):.3f}")
+                cols[2].metric("MAPE", f"{avg_metrics.get('MAPE', 0):.3f}%")
+                cols[3].metric("R²", f"{avg_metrics.get('R2', 0):.3f}")
+
+            # --- Display Per-Hour Metrics ---
+            st.subheader("Metrics Per Hour")
+            per_hour_metrics = hourly_results.get("per_hour_metrics", {})
+            if per_hour_metrics:
+                per_hour_df = pd.DataFrame.from_dict(per_hour_metrics, orient='index')
+                metrics_df = per_hour_df['metrics'].apply(pd.Series)
+                per_hour_df = pd.concat([per_hour_df[['hour']], metrics_df], axis=1)
+                st.table(per_hour_df)
+
+            # --- Display Plots ---
+            st.subheader("Evaluation Plots")
+            st.image(f"{hourly_plots_url}/metrics_comparison.png", caption="Metrics Comparison Across Horizons")
+            st.image(f"{hourly_plots_url}/time_series_predictions.png", caption="Time Series Predictions")
+
+            # Per-hour prediction plots
+            hour_options = [f"t+{h}h" for h in [1, 6, 12, 18, 24]]
+            selected_hour = st.selectbox("Select an hour to view prediction vs. actuals:", options=hour_options, key="hourly_target_select")
+
+            if selected_hour:
+                st.image(f"{hourly_plots_url}/predictions_vs_actuals_{selected_hour}.png", caption=f"Predictions vs. Actuals for {selected_hour}")
+
+        except requests.exceptions.RequestException as e:
+            st.error(f"Could not fetch hourly performance data from API: {e}")
+        except Exception as e:
+            st.error(f"An error occurred while displaying hourly performance data: {e}")
+
+# ========================================
+# BACKGROUND IMAGE
+# ========================================
 bg_path = r"bg.png"  
 # --- Đọc ảnh và chuyển sang base64 ---
 def get_base64(bin_file):

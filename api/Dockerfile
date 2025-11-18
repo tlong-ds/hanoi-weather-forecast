@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
 # Copy requirements and source code
 COPY requirements.txt ./
 COPY src/ ./src/
-COPY api/ ./
+COPY api.py ./
 COPY dataset/ ./dataset/
 COPY data_processing_hourly/ ./data_processing_hourly/
 COPY processed_data/ ./processed_data/

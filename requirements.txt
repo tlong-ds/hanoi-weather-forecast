@@ -23,4 +23,7 @@ catboost
 optuna
 onnxruntime
 skl2onnx
-onnx
+onnxstatsmodels
+plotly
+streamlit
+google-generativeai

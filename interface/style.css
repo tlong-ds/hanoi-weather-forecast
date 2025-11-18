@@ -1,0 +1,171 @@
+
+/* Main page background - Will be overridden by dynamic weather background */
+.main {
+    transition: background 0.5s ease;
+}
+
+.block-container {
+    padding-top: 2rem;
+    max-width: 1400px;
+}
+
+/* Main card - Glass morphism effect */
+.main-card {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    border-radius: 24px;
+    padding: 35px;
+    margin-bottom: 25px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), 
+                0 0 0 1px rgba(255, 255, 255, 0.15) inset;
+    backdrop-filter: blur(12px) saturate(150%);
+    -webkit-backdrop-filter: blur(12px) saturate(150%);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    transition: all 0.3s ease;
+}
+
+.main-card:hover {
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4),
+                0 0 0 1px rgba(255, 255, 255, 0.2) inset;
+    transform: translateY(-2px);
+}
+
+/* Forecast card - Adaptive glass effect */
+.forecast-card {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 16px;
+    padding: 18px;
+    margin: 10px 0;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25),
+                0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+    backdrop-filter: blur(10px) saturate(140%);
+    -webkit-backdrop-filter: blur(10px) saturate(140%);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.forecast-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35),
+                0 0 0 1px rgba(255, 255, 255, 0.15) inset;
+    background: rgba(255, 255, 255, 0.15);
+}
+
+/* Large temperature display */
+.temp-large {
+    font-size: 72px;
+    font-weight: 700;
+    margin: 0;
+    color: #ffffff;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.5),
+                 0 4px 24px rgba(0, 0, 0, 0.3);
+}
+
+/* Detail box - Enhanced glass morphism */
+.detail-box {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 16px;
+    padding: 18px;
+    margin: 10px 0;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25),
+                0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+    backdrop-filter: blur(10px) saturate(140%);
+    -webkit-backdrop-filter: blur(10px) saturate(140%);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.detail-box:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3),
+                0 0 0 1px rgba(255, 255, 255, 0.15) inset;
+    background: rgba(255, 255, 255, 0.15);
+}
+
+/* Sidebar - Adaptive glass effect */
+section[data-testid="stSidebar"] {
+    background: rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(15px) saturate(120%);
+    -webkit-backdrop-filter: blur(15px) saturate(120%);
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+section[data-testid="stSidebar"] .element-container {
+    color: #ffffff;
+}
+
+/* Headers - Enhanced contrast */
+h1, h2, h3 {
+    color: #ffffff !important;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.4),
+                 0 4px 16px rgba(0, 0, 0, 0.2);
+    letter-spacing: -0.02em;
+}
+
+/* Metrics - Better visibility */
+[data-testid="stMetricValue"] {
+    color: #ffffff;
+    font-size: 24px;
+    font-weight: 600;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+[data-testid="stMetricDelta"] {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+/* Info boxes - Glass morphism */
+.stAlert {
+    background: rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #ffffff;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* Subheader styling */
+.css-10trblm {
+    color: #ffffff;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+/* Caption text - Improved readability */
+.css-1629p8f, .st-emotion-cache-1629p8f {
+    color: rgba(255, 255, 255, 0.85) !important;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* Streamlit elements enhancement */
+.stApp {
+    transition: background 0.5s ease;
+}
+
+/* Input fields */
+input, textarea, select {
+    background: rgba(255, 255, 255, 0.1) !important;
+    border: 1px solid rgba(255, 255, 255, 0.2) !important;
+    color: #ffffff !important;
+    backdrop-filter: blur(8px);
+}
+
+input:focus, textarea:focus, select:focus {
+    border-color: rgba(255, 255, 255, 0.4) !important;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Buttons */
+.stButton > button {
+    background: rgba(255, 255, 255, 0.15);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    backdrop-filter: blur(8px);
+    transition: all 0.3s ease;
+}
+
+.stButton > button:hover {
+    background: rgba(255, 255, 255, 0.25);
+    border-color: rgba(255, 255, 255, 0.3);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    transform: translateY(-2px);
+}
